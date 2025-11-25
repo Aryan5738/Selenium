@@ -3,12 +3,14 @@ from selenium import webdriver
 from selenium.webdriver.common.by import By
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.common.action_chains import ActionChains
+from selenium.webdriver.chrome.service import Service
+import chromedriver_autoinstaller
 import time
-import json
+import os
 
 
 # ==========================
-# YOUR COOKIES (Converted to JSON List)
+# FACEBOOK COOKIES
 # ==========================
 cookies = [
     {"name": "sb", "value": "x-4VZxbqkmCAawFwsNZch1cr"},
@@ -31,17 +33,23 @@ cookies = [
     {"name": "wd", "value": "1280x2254"}
 ]
 
-# ==========================
-# THREAD ID
-# ==========================
 THREAD_ID = "800019873203125"
 
 
 
 # ==========================
-# Selenium Driver Setup
+# Selenium Driver Setup (AUTO INSTALL)
 # ==========================
 def get_driver():
+    # Auto install correct chrome driver
+    chromedriver_autoinstaller.install()
+
+    # Check system chrome driver path
+    chrome_path = "/usr/bin/chromedriver"
+
+    if not os.path.exists(chrome_path):
+        chrome_path = os.path.join(os.getcwd(), "chromedriver")  # auto-installed
+
     chrome_options = Options()
     chrome_options.add_argument("--disable-gpu")
     chrome_options.add_argument("--no-sandbox")
@@ -51,15 +59,18 @@ def get_driver():
     chrome_options.add_experimental_option("excludeSwitches", ["enable-automation"])
     chrome_options.add_argument("--headless=new")
 
-    driver = webdriver.Chrome(options=chrome_options)
+    service = Service(chrome_path)
+    driver = webdriver.Chrome(service=service, options=chrome_options)
     return driver
 
 
+
 # ==========================
-# Cookie Login
+# LOGIN WITH COOKIES
 # ==========================
 def login_with_cookies(driver):
     driver.get("https://www.facebook.com/")
+    time.sleep(3)
 
     for c in cookies:
         try:
@@ -71,8 +82,9 @@ def login_with_cookies(driver):
     time.sleep(4)
 
 
+
 # ==========================
-# Message Sender
+# SEND MESSAGE
 # ==========================
 def send_msg(driver, msg, delay):
     url = f"https://www.facebook.com/messages/e2ee/t/{THREAD_ID}"
@@ -100,26 +112,27 @@ def send_msg(driver, msg, delay):
 # ==========================
 # STREAMLIT UI
 # ==========================
-st.title("🚀 Facebook Auto Message Sender")
+st.title("🚀 Facebook Auto Message Sender (Selenium + Cookies + Streamlit)")
+
 message = st.text_area("✉ Message", height=100)
 delay = st.number_input("⏱ Delay (seconds)", min_value=1, max_value=60, value=3)
 start = st.button("🔥 Send Message")
 
 if start:
     if message.strip() == "":
-        st.error("⚠ Message empty hai veer!")
+        st.error("⚠ Message khaali hai veer!")
     else:
-        st.info("🔄 Chrome Start ho reha...")
+        st.info("🔄 Chrome start ho reha...")
         driver = get_driver()
 
-        st.info("🔑 Login with Cookies...")
+        st.info("🔑 Cookie Login...")
         login_with_cookies(driver)
 
-        st.info("📨 Sending Message...")
+        st.info("📨 Message bhej reha...")
         status = send_msg(driver, message, delay)
 
         if status is True:
-            st.success("✅ Message Sent Successfully!")
+            st.success("✅ Successfully Sent!")
         else:
             st.error(f"❌ Error: {status}")
 
