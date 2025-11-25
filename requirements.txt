@@ -1,5 +1,5 @@
+streamlit==1.36.0
 selenium==4.21.0
 chromedriver-autoinstaller==0.6.4
-streamlit==1.36.0
 webdriver-manager==4.0.1
-requests==2.32.3
+requests
