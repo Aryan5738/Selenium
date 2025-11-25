@@ -4,13 +4,12 @@ from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.common.by import By
 from selenium.webdriver.common.keys import Keys
-from webdriver_manager.chrome import ChromeDriverManager
 import time
 import os
 
 # --- PAGE CONFIG ---
 st.set_page_config(page_title="FB Infinite Sender", layout="centered")
-st.title("Facebook Infinite Message Sender")
+st.title("Facebook Infinite Message Sender (System Driver)")
 
 # --- USER INPUTS ---
 DEFAULT_COOKIE = "Sb=x-4VZxbqkmCAawFwsNZch1cr; m_pixel_ratio=2; ps_l=1; ps_n=1; usida=eyJ2ZXIiOjEsImlkIjoiQXNwa3poZzFqMWYwbmsiLCJ0aW1lIjoxNzM2MDIyNjM2fQ%3D%3D; oo=v1; vpd=v1%3B634x360x2; x-referer=eyJyIjoiL2NoZWNrcG9pbnQvMTUwMTA5MjgyMzUyNTI4Mi9sb2dvdXQvP25leHQ9aHR0cHMlM0ElMkYlMkZtLmZhY2Vib29rLmNvbSUyRiIsImgiOiIvY2hlY2twb2ludC8xNTAxMDkyODIzNTI1MjgyL2xvZ291dC8%2FbmV4dD1odHRwcyUzQSUyRiUyRm0uZmFjZWJvb2suY29tJTJGIiwicyI6Im0ifQ%3D%3D; pas=100018459948597%3AyY8iKAz4qS%2C61576915895165%3Ah3M07gRmIr%2C100051495735634%3AaWZGIhmpcN%2C100079959253161%3AERjtJDwIKY%2C100085135237853%3ASJzxBm80J0%2C100039111611241%3AYdPtkzDOqQ%2C61551133266466%3Aw3egO2jjPR%2C61580506865263%3AgBocX6ACyH%2C61580725287646%3Az32vfC8XFx%2C61580627947722%3NGvvqUwSjM%2C61580696818474%3AOANvC0tEZ7; locale=en_GB; c_user=61580506865263; datr=g8olaZiZYQMO7uPOZr9LIPht; xs=13%3AQoLIRrRzRReDAA%3A2%3A1764084356%3A-1%3A-1; wl_cbv=v2%3Bclient_version%3A2985%3Btimestamp%3A1764084357; fbl_st=100727294%3BT%3A29401406; fr=1DU5Jl03wP4b7GP8t.AWefU_KjBG8Z5AZgumwZsBRycYqwUkK410GOJ9ACH6HquX9_4fk.BoxuDH..AAA.0.0.BpJcqK.AWdFN0M6cD-SLsdpO8kcmDP_8_s; presence=C%7B%22lm3%22%3A%22sc.800019873203125%22%2C%22t3%22%3A%5B%7B%22o%22%3A0%2C%22i%22%3A%22g.1160300088952219%22%7D%5D%2C%22utc3%22%3A1764084412300%2C%22v%22%3A1%7D; wd=1280x2254; dpr=2"
@@ -24,8 +23,6 @@ with col1:
     enable_infinite = st.checkbox("Enable Infantry Mode", value=False)
 with col2:
     delay_time = st.number_input("Delay (Seconds)", min_value=1, value=2)
-
-# --- HELPER FUNCTIONS ---
 
 def parse_cookies(cookie_string):
     cookies = []
@@ -41,32 +38,22 @@ def parse_cookies(cookie_string):
 
 def get_driver():
     chrome_options = Options()
-    # Streamlit Cloud ke liye zaroori arguments
     chrome_options.add_argument("--headless")
     chrome_options.add_argument("--no-sandbox")
     chrome_options.add_argument("--disable-dev-shm-usage")
     chrome_options.add_argument("--disable-gpu")
     chrome_options.add_argument("--disable-notifications")
     
-    # --- FIXED DRIVER PATH LOGIC ---
-    # Hum pehle system path check karenge jo packages.txt se banta hai
+    # --- CRITICAL FIX: HARDCODED PATHS FOR STREAMLIT CLOUD ---
+    # Streamlit Cloud par browser aur driver yahi install hote hain
+    chrome_options.binary_location = "/usr/bin/chromium"
+    service = Service("/usr/bin/chromedriver")
     
-    service = None
-    if os.path.exists("/usr/bin/chromedriver"):
-        # Streamlit Cloud Default Path
-        service = Service("/usr/bin/chromedriver")
-    elif os.path.exists("/usr/lib/chromium-browser/chromedriver"):
-        # Alternative Linux Path
-        service = Service("/usr/lib/chromium-browser/chromedriver")
-    else:
-        # Last resort: Download fresh driver
-        service = Service(ChromeDriverManager().install())
-            
     try:
         driver = webdriver.Chrome(service=service, options=chrome_options)
         return driver
     except Exception as e:
-        st.error(f"Critical Driver Error: {e}")
+        st.error(f"Error starting driver: {e}")
         return None
 
 # --- MAIN EXECUTION ---
@@ -94,8 +81,9 @@ if st.button("Start Messaging"):
             driver.get(target_url)
             time.sleep(8) 
 
+            # Debug: Check URL
             if "login" in driver.current_url:
-                st.error("Login Failed! Check Cookie.")
+                st.error("Login Failed! Cookies expired.")
                 driver.quit()
                 st.stop()
 
@@ -115,7 +103,7 @@ if st.button("Start Messaging"):
                 
                 while keep_running:
                     try:
-                        # Element ko wapis dhundo taaki 'Stale Element' error na aaye
+                        # Re-find element
                         try:
                             msg_box = driver.find_element(By.CSS_SELECTOR, 'div[aria-label="Message"]')
                         except:
@@ -138,7 +126,6 @@ if st.button("Start Messaging"):
                         break
                 
                 st.success("Finished.")
-                
             else:
                 st.error("Message Box Not Found.")
                 driver.save_screenshot("debug.png")
@@ -149,4 +136,4 @@ if st.button("Start Messaging"):
         finally:
             if not enable_infinite:
                 driver.quit()
-        
+                
