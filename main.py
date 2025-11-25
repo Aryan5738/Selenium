@@ -9,7 +9,7 @@ from selenium.webdriver.common.by import By
 from selenium.webdriver.common.keys import Keys
 
 st.set_page_config(page_title="FB Auto Sender", layout="centered")
-st.title("FB Sender (Aggressive Bypass 🚀)")
+st.title("FB Sender (The Hunter 🎯)")
 
 # --- USER INPUTS ---
 st.subheader("1. Login Details")
@@ -66,56 +66,73 @@ def get_driver():
         st.error("❌ Driver not found. Please REBOOT App.")
         return None
 
-# --- 🔥 THE AGGRESSIVE BYPASS FUNCTION 🔥 ---
-def force_bypass_popup(driver):
-    st.info("⚡ Activating Aggressive Bypass Mode...")
-    
-    # "Trying Trying" Logic: Try for 5 iterations
-    for i in range(1, 6):
-        st.text(f"Attempt {i}/5 to find the blue button...")
+# --- 🔥 ADVANCED HUNTER LOGIC 🔥 ---
+def hunt_down_buttons(driver):
+    """
+    यह फंक्शन एक 'शिकारी' की तरह है। यह Continue, Restore और Close बटन को ढूंढेगा
+    और तब तक क्लिक करेगा जब तक Message Box नहीं मिल जाता।
+    """
+    st.info("⚔️ Hunter Mode Activated: Smashing Buttons...")
+
+    # हम 7 बार कोशिश करेंगे (Trying... Trying...)
+    for attempt in range(1, 8):
+        status_text = st.empty()
+        status_text.text(f"Attempt {attempt}/7: Scanning for blocks...")
         
-        # 1. Try Clicking 'Don't Restore' (Blue Button)
-        # We look for ANY element that contains the text "restore messages" or "Don't restore"
-        found_something = False
+        button_clicked = False
+        
+        # --- TARGET 1: CONTINUE BUTTON (Blue one from screenshot) ---
         try:
-            # XPATH strategy: Find any tag containing the text
-            buttons = driver.find_elements(By.XPATH, "//*[contains(text(), 'restore messages')]")
+            # Strategies to find 'Continue'
+            xpaths = [
+                "//div[@role='button']//span[contains(text(), 'Continue')]", # Best match
+                "//*[text()='Continue']",
+                "//div[@aria-label='Continue']"
+            ]
             
-            # Add searching for the button wrapper specifically
-            buttons += driver.find_elements(By.XPATH, "//div[@role='button']//span[contains(text(), 'restore')]")
-
-            if buttons:
-                for btn in buttons:
-                    # Highlight it (Yellow)
-                    driver.execute_script("arguments[0].style.border='5px solid yellow'", btn)
-                    time.sleep(0.5)
-                    # FORCE CLICK (Javascript)
-                    driver.execute_script("arguments[0].click();", btn)
-                    st.toast(f"Boom! Clicked button on Attempt {i} 💥")
-                    found_something = True
-                    time.sleep(3) # Wait for page to react
-        except Exception as e:
-            print(f"Bypass error: {e}")
-
-        # 2. Try Clicking 'X' (Close) Button as backup
-        try:
-            close_btns = driver.find_elements(By.CSS_SELECTOR, 'div[aria-label="Close"]')
-            for c_btn in close_btns:
-                driver.execute_script("arguments[0].click();", c_btn)
-                st.toast("Clicked X button")
-                found_something = True
+            for xpath in xpaths:
+                btns = driver.find_elements(By.XPATH, xpath)
+                for btn in btns:
+                    if btn.is_displayed():
+                        driver.execute_script("arguments[0].click();", btn)
+                        st.toast("Boom! Clicked 'Continue' 🔵")
+                        button_clicked = True
+                        time.sleep(2)
         except:
             pass
-            
-        # Check if Message Box is now visible? If yes, break loop
+
+        # --- TARGET 2: DON'T RESTORE BUTTON ---
         try:
-            if driver.find_elements(By.CSS_SELECTOR, 'div[aria-label="Message"]'):
-                st.success("Bypass Successful! Message box found. ✅")
+            btns = driver.find_elements(By.XPATH, "//*[contains(text(), 'restore messages')]")
+            for btn in btns:
+                 driver.execute_script("arguments[0].click();", btn)
+                 st.toast("Boom! Clicked 'Don't Restore' 🛑")
+                 button_clicked = True
+                 time.sleep(2)
+        except:
+            pass
+
+        # --- TARGET 3: CLOSE (X) BUTTON ---
+        try:
+            close_btns = driver.find_elements(By.CSS_SELECTOR, 'div[aria-label="Close"]')
+            for btn in close_btns:
+                driver.execute_script("arguments[0].click();", btn)
+                st.toast("Closed Popup ❎")
+                button_clicked = True
+        except:
+            pass
+
+        # --- CHECK SUCCESS ---
+        # अगर बटन दबाया है, तो चेक करो कि क्या मैसेज बॉक्स खुला?
+        try:
+            msg_box = driver.find_element(By.CSS_SELECTOR, 'div[aria-label="Message"]')
+            if msg_box:
+                status_text.success("Target Destroyed. Message Box Found! ✅")
                 return True
         except:
             pass
-            
-        time.sleep(2) # Wait before next "Trying"
+        
+        time.sleep(2) # अगली कोशिश से पहले सांस लो
 
     return False
 
@@ -142,11 +159,11 @@ if st.button("Start Messaging"):
             
             status_box.text("Opening Chat...")
             driver.get(target_url)
-            time.sleep(10) # Wait for popup to fully load
+            time.sleep(8) 
 
-            # --- 🔥 RUN BYPASS 🔥 ---
-            force_bypass_popup(driver)
-            # -----------------------
+            # --- 🔥 RUN THE HUNTER 🔥 ---
+            hunt_down_buttons(driver)
+            # --------------------------
 
             msg_box = None
             selectors = [
@@ -193,13 +210,12 @@ if st.button("Start Messaging"):
                 st.success("Done.")
             else:
                 st.error("Message Box Not Found.")
-                st.write("The popup might still be there. Check screenshot:")
-                driver.save_screenshot("bypass_fail.png")
-                st.image("bypass_fail.png")
+                st.caption("Last Screen State:")
+                driver.save_screenshot("final_check.png")
+                st.image("final_check.png")
 
         except Exception as e:
             st.error(f"Critical Error: {e}")
         finally:
             if not enable_infinite:
                 driver.quit()
-                
