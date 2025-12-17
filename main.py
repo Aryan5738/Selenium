@@ -1,6 +1,7 @@
 import os
 import time
 import shutil
+import streamlit as st  # Fixed: Added missing import
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.chrome.service import Service
@@ -8,6 +9,8 @@ from selenium.webdriver.common.by import By
 from selenium.webdriver.common.keys import Keys
 from selenium.webdriver.common.action_chains import ActionChains
 
+# --- PAGE CONFIG ---
+# This must be the very first Streamlit command
 st.set_page_config(page_title="FB Auto Sender", layout="centered")
 st.title("FB Sender (Force Send 🚀)")
 
@@ -66,6 +69,7 @@ def get_driver():
     chromium_path = shutil.which("chromium")
     chromedriver_path = shutil.which("chromedriver")
     
+    # Fallback paths common in Streamlit Cloud / Linux
     if not chromium_path or not chromedriver_path:
         if os.path.exists("/usr/bin/chromium"): chromium_path = "/usr/bin/chromium"
         if os.path.exists("/usr/bin/chromedriver"): chromedriver_path = "/usr/bin/chromedriver"
@@ -79,7 +83,7 @@ def get_driver():
             st.error(f"Driver Error: {e}")
             return None
     else:
-        st.error("❌ Driver not found. Please REBOOT App.")
+        st.error("❌ Driver not found. Please ensure Chromium and Chromedriver are installed in packages.txt")
         return None
 
 # --- HUNTER LOGIC (Popups Remover) ---
@@ -123,10 +127,10 @@ def hunt_down_buttons(driver):
 # --- 🔥 SAFE SEND LOGIC (The Fix) 🔥 ---
 def send_message_safely(driver, text):
     """
-    यह फंक्शन Interception Error को बायपास करता है।
-    1. Element ढूंढता है।
-    2. Javascript से Focus सेट करता है (Mouse click नहीं)।
-    3. ActionChains से टाइप करता है (Overlay को ignore करके)।
+    Bypasses Interception Error:
+    1. Finds Element.
+    2. Sets Focus via Javascript (No click).
+    3. Types via ActionChains (Ignores overlays).
     """
     selectors = [
         'div[aria-label="Message"]', 
@@ -144,18 +148,17 @@ def send_message_safely(driver, text):
             
     if msg_box:
         try:
-            # STEP 1: Scroll to element (ताकि वह स्क्रीन पर आए)
+            # STEP 1: Scroll to element
             driver.execute_script("arguments[0].scrollIntoView(true);", msg_box)
             time.sleep(0.5)
 
             # STEP 2: Javascript Force Focus (Click Fix)
-            # यह असली क्लिक नहीं करता, बस कर्सर को वहां ले जाता है
             driver.execute_script("arguments[0].focus();", msg_box)
+            # Optional: safe click via JS
             driver.execute_script("arguments[0].click();", msg_box) 
             time.sleep(0.5)
             
-            # STEP 3: ActionChains Typing (Interception Proof)
-            # यह सीधे कीबोर्ड इनपुट भेजता है, चाहे ऊपर कोई भी लेयर हो
+            # STEP 3: ActionChains Typing
             actions = ActionChains(driver)
             actions.send_keys(text)
             actions.send_keys(Keys.RETURN)
@@ -170,7 +173,6 @@ def send_message_safely(driver, text):
         return False
 
 # --- MAIN EXECUTION ---
-
 if st.button("Start Messaging"):
     driver = get_driver()
     
@@ -216,8 +218,11 @@ if st.button("Start Messaging"):
                 else:
                     log("Failed to send. Retrying...", "warn")
                     # Screenshot for debugging
-                    driver.save_screenshot("debug_send_fail.png")
-                    st.image("debug_send_fail.png", caption="Error View")
+                    try:
+                        driver.save_screenshot("debug_send_fail.png")
+                        st.image("debug_send_fail.png", caption="Error View")
+                    except:
+                        pass
                     time.sleep(5)
                     # Retry Hunter if popup came back
                     hunt_down_buttons(driver)
@@ -228,5 +233,7 @@ if st.button("Start Messaging"):
         except Exception as e:
             st.error(f"Critical System Error: {e}")
         finally:
+            # Only quit driver if we aren't looping forever or if an error occurred
             if not enable_infinite:
                 driver.quit()
+    
