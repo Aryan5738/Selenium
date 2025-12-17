@@ -1,12 +1,11 @@
-import uvicorn
+import streamlit as st
 import threading
 import uuid
 import time
+import json
 import os
 import shutil
 import datetime
-from fastapi import FastAPI, BackgroundTasks, HTTPException
-from pydantic import BaseModel
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.chrome.service import Service
@@ -14,198 +13,165 @@ from selenium.webdriver.common.by import By
 from selenium.webdriver.common.keys import Keys
 from selenium.webdriver.common.action_chains import ActionChains
 
-# --- APP SETUP ---
-app = FastAPI(title="FB Auto Sender API")
+# --- PAGE CONFIG ---
+st.set_page_config(page_title="FB API Bot", layout="wide")
 
-# --- GLOBAL STORAGE (In-Memory Database) ---
-# Format: { "task_id": { "status": "...", "logs": [], "count": 0, "stop": False } }
-tasks = {}
+# --- GLOBAL MEMORY ---
+@st.cache_resource
+class TaskManager:
+    def __init__(self):
+        self.tasks = {} 
 
-# --- INPUT MODEL ---
-class TaskInput(BaseModel):
-    cookie: str
-    url: str
-    message: str
-    delay: int = 2
-    infinite: bool = False
+    def create_task(self):
+        task_id = str(uuid.uuid4())[:8]
+        self.tasks[task_id] = {
+            "status": "Running",
+            "logs": [],
+            "count": 0,
+            "stop": False,
+            "start_time": datetime.datetime.now().strftime("%H:%M:%S")
+        }
+        return task_id
 
-# --- SELENIUM HELPERS ---
+    def get_task(self, task_id):
+        return self.tasks.get(task_id)
+
+    def log(self, task_id, msg):
+        if task_id in self.tasks:
+            self.tasks[task_id]["logs"].append(f"[{datetime.datetime.now().strftime('%H:%M:%S')}] {msg}")
+
+manager = TaskManager()
+
+# --- SELENIUM ---
 def get_driver():
-    """Starts Headless Chrome Driver"""
     chrome_options = Options()
     chrome_options.add_argument("--headless")
     chrome_options.add_argument("--no-sandbox")
     chrome_options.add_argument("--disable-dev-shm-usage")
     chrome_options.add_argument("--disable-gpu")
     
-    # Auto-detect paths (Works on Linux/Cloud/PC)
-    chromium_path = shutil.which("chromium")
-    chromedriver_path = shutil.which("chromedriver")
-    
-    # Manual Fallback for Cloud Servers
-    if not chromium_path: 
-        if os.path.exists("/usr/bin/chromium"): chromium_path = "/usr/bin/chromium"
-    if not chromedriver_path:
-        if os.path.exists("/usr/bin/chromedriver"): chromedriver_path = "/usr/bin/chromedriver"
+    path_chromium = shutil.which("chromium") or "/usr/bin/chromium"
+    path_driver = shutil.which("chromedriver") or "/usr/bin/chromedriver"
 
-    if chromium_path and chromedriver_path:
-        chrome_options.binary_location = chromium_path
-        service = Service(chromedriver_path)
+    if os.path.exists(path_chromium) and os.path.exists(path_driver):
+        chrome_options.binary_location = path_chromium
+        service = Service(path_driver)
         try:
             return webdriver.Chrome(service=service, options=chrome_options)
-        except Exception as e:
-            print(f"Driver Init Error: {e}")
-            return None
+        except: return None
     return None
 
-def parse_cookies(cookie_string):
-    """Converts string cookies to list"""
-    cookies = []
-    try:
-        items = cookie_string.split(';')
-        for item in items:
-            if '=' in item:
-                name, value = item.strip().split('=', 1)
-                cookies.append({'name': name, 'value': value, 'domain': '.facebook.com'})
-        return cookies
-    except:
-        return []
-
-def send_message_safely(driver, text):
-    """Safe Send Logic (Bypasses Interception)"""
-    try:
-        selectors = ['div[aria-label="Message"]', 'div[role="textbox"]', 'div[contenteditable="true"]']
-        msg_box = None
-        for s in selectors:
-            try: 
-                msg_box = driver.find_element(By.CSS_SELECTOR, s)
-                if msg_box: break
-            except: continue
-        
-        if msg_box:
-            driver.execute_script("arguments[0].focus();", msg_box)
-            actions = ActionChains(driver)
-            actions.send_keys(text)
-            actions.send_keys(Keys.RETURN)
-            actions.perform()
-            return True
-    except:
-        return False
-    return False
-
-def hunt_popups(driver):
-    """Closes 'Continue' or 'Restore' popups"""
-    try:
-        btns = driver.find_elements(By.XPATH, "//div[@role='button']//span[contains(text(), 'Continue')]")
-        for btn in btns: driver.execute_script("arguments[0].click();", btn)
-    except: pass
-
-# --- BACKGROUND WORKER ---
-def worker_process(task_id: str, data: TaskInput):
-    """The Logic that runs in background"""
-    tasks[task_id]["status"] = "Initializing Driver..."
+def run_worker(task_id, cookie, url, msg, delay, infinite):
+    manager.log(task_id, "Starting Driver...")
     driver = get_driver()
-    
     if not driver:
-        tasks[task_id]["status"] = "Failed: Driver Config Error"
-        tasks[task_id]["logs"].append("Error: Chromium/Driver not found.")
+        manager.tasks[task_id]["status"] = "Failed"
         return
 
     try:
-        # 1. Login
-        tasks[task_id]["logs"].append("Opening Facebook...")
         driver.get("https://www.facebook.com/")
+        try:
+            items = cookie.split(';')
+            for item in items:
+                if '=' in item:
+                    name, value = item.strip().split('=', 1)
+                    driver.add_cookie({'name': name, 'value': value, 'domain': '.facebook.com'})
+        except: pass
         
-        cookies = parse_cookies(data.cookie)
-        for c in cookies:
-            try: driver.add_cookie(c)
-            except: pass
-            
-        # 2. Open Chat
-        tasks[task_id]["status"] = "Navigating..."
-        tasks[task_id]["logs"].append(f"Opening Chat URL...")
-        driver.get(data.url)
-        time.sleep(8) # Wait for page load
+        manager.log(task_id, "Navigating...")
+        driver.get(url)
+        time.sleep(8)
         
-        hunt_popups(driver)
-        tasks[task_id]["status"] = "Running"
-        
-        # 3. Loop
-        keep_running = True
-        while keep_running:
-            # Check Stop Signal
-            if tasks[task_id]["stop"]:
-                tasks[task_id]["logs"].append("Stop signal received.")
-                break
-            
-            # Send
-            if send_message_safely(driver, data.message):
-                tasks[task_id]["count"] += 1
-                cnt = tasks[task_id]["count"]
-                timestamp = datetime.datetime.now().strftime("%H:%M:%S")
-                tasks[task_id]["logs"].append(f"[{timestamp}] Sent Msg #{cnt} ✅")
+        # Popup Hunter
+        try:
+            btns = driver.find_elements(By.XPATH, "//div[@role='button']//span[contains(text(), 'Continue')]")
+            for btn in btns: driver.execute_script("arguments[0].click();", btn)
+        except: pass
+
+        while not manager.tasks[task_id]["stop"]:
+            try:
+                # Find Box
+                box = driver.find_element(By.CSS_SELECTOR, 'div[aria-label="Message"], div[role="textbox"]')
+                driver.execute_script("arguments[0].focus();", box)
+                actions = ActionChains(driver)
+                actions.send_keys(msg)
+                actions.send_keys(Keys.RETURN)
+                actions.perform()
                 
-                # Infinite Check
-                if not data.infinite:
-                    tasks[task_id]["status"] = "Completed"
-                    keep_running = False
-                else:
-                    time.sleep(data.delay)
-            else:
-                tasks[task_id]["logs"].append("⚠️ Failed to send (Popup?). Retrying...")
-                hunt_popups(driver)
+                manager.tasks[task_id]["count"] += 1
+                manager.log(task_id, f"Sent #{manager.tasks[task_id]['count']}")
+                
+                if not infinite:
+                    manager.tasks[task_id]["status"] = "Completed"
+                    break
+                time.sleep(int(delay))
+            except:
                 time.sleep(5)
-                
+                # Retry Popup Hunter
+                try:
+                    btns = driver.find_elements(By.XPATH, "//div[@role='button']//span[contains(text(), 'Continue')]")
+                    for btn in btns: driver.execute_script("arguments[0].click();", btn)
+                except: pass
+
     except Exception as e:
-        tasks[task_id]["status"] = "Error"
-        tasks[task_id]["logs"].append(f"Critical Error: {str(e)}")
+        manager.log(task_id, f"Error: {str(e)}")
+        manager.tasks[task_id]["status"] = "Error"
     finally:
         driver.quit()
-        if tasks[task_id]["status"] == "Running":
-            tasks[task_id]["status"] = "Stopped"
 
-# --- API ENDPOINTS ---
+# --- 🔥 API HACK LOGIC ---
+# We check URL parameters. If 'api_mode' is present, we act as API.
 
-@app.get("/")
-def home():
-    return {"status": "Online", "message": "FB Auto Sender API is Ready 🚀"}
+params = st.query_params
 
-@app.post("/start_task")
-def start_task(data: TaskInput, background_tasks: BackgroundTasks):
-    """Creates a new task and runs it in background"""
-    task_id = str(uuid.uuid4())[:8]
+if "api_mode" in params:
+    mode = params.get("mode")
     
-    # Init State
-    tasks[task_id] = {
-        "status": "Queued",
-        "count": 0,
-        "logs": ["Task created."],
-        "stop": False,
-        "start_time": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    }
-    
-    # Hand over to background worker
-    background_tasks.add_task(worker_process, task_id, data)
-    
-    return {"task_id": task_id, "message": "Background task started successfully"}
+    # 1. START TASK
+    if mode == "start":
+        try:
+            cookie = params.get("cookie")
+            url = params.get("url")
+            msg = params.get("msg")
+            delay = params.get("delay", 2)
+            infinite = params.get("infinite") == "true"
+            
+            new_id = manager.create_task()
+            t = threading.Thread(target=run_worker, args=(new_id, cookie, url, msg, delay, infinite))
+            t.start()
+            
+            response = {"status": "success", "task_id": new_id}
+        except Exception as e:
+            response = {"status": "error", "message": str(e)}
 
-@app.get("/status/{task_id}")
-def check_status(task_id: str):
-    """Returns live status of a task"""
-    if task_id not in tasks:
-        raise HTTPException(status_code=404, detail="Task ID not found")
-    return tasks[task_id]
-
-@app.post("/stop/{task_id}")
-def stop_task(task_id: str):
-    """Stops a running task"""
-    if task_id not in tasks:
-        raise HTTPException(status_code=404, detail="Task ID not found")
+    # 2. CHECK STATUS
+    elif mode == "status":
+        tid = params.get("tid")
+        task = manager.get_task(tid)
+        if task:
+            response = task
+        else:
+            response = {"error": "Task not found"}
+            
+    # 3. STOP TASK
+    elif mode == "stop":
+        tid = params.get("tid")
+        if tid in manager.tasks:
+            manager.tasks[tid]["stop"] = True
+            response = {"status": "stopped"}
+        else:
+            response = {"error": "Invalid ID"}
     
-    tasks[task_id]["stop"] = True
-    return {"message": "Stop signal sent to worker"}
+    else:
+        response = {"error": "Unknown command"}
 
-# --- RUNNER ---
-if __name__ == "__main__":
-    # Runs the server on port 8000
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    # --- MAGIC TRICK: Hide JSON in HTML ---
+    # Termux will regex search for API_START {json} API_END
+    st.markdown(f"", unsafe_allow_html=True)
+    st.write("API Request Processed.")
+    st.stop() # Stop rendering the rest of the UI
+
+# --- NORMAL UI (For Web) ---
+st.title("FB Auto Sender (Web Interface)")
+st.write("Termux API Endpoint Active.")
+                                               
