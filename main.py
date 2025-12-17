@@ -22,10 +22,10 @@ HEADERS = {"Content-Type": "application/json", "X-Master-Key": API_KEY}
 # --- PAGE CONFIG ---
 st.set_page_config(page_title="E2EE Master Server", layout="wide", page_icon="⚡")
 
-# --- CSS STYLING (Hacker/Dark Theme) ---
+# --- CSS STYLING ---
 st.markdown("""
 <style>
-    .stApp { background-color: #0f111a; }
+    .stApp { background-color: #0f111a; color: white; }
     .task-card {
         background-color: #1a1d29;
         border: 1px solid #2d3342;
@@ -45,28 +45,38 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# --- DATABASE HANDLERS ---
+# --- DATABASE HANDLERS (FIXED) ---
 def get_db():
+    """Fetches DB safely. If corrupt, returns empty dict to prevent crash."""
     try:
         r = requests.get(BASE_URL + "/latest", headers=HEADERS)
-        return r.json()['record'] if r.status_code == 200 else {}
+        if r.status_code == 200:
+            data = r.json()['record']
+            # CRITICAL FIX: Check if data is actually a Dictionary
+            if isinstance(data, dict):
+                return data
+            else:
+                return {} # Return empty if it's a List or String
+        return {}
     except: return {}
 
 def update_db_task(task_id, updates):
-    """Updates specific fields for a task safely"""
+    """Updates specific fields safely"""
     try:
         current_db = get_db()
         if task_id in current_db:
             current_db[task_id].update(updates)
-            # Maintain Last Active timestamp
             current_db[task_id]["last_updated"] = str(datetime.datetime.now())
             requests.put(BASE_URL, headers=HEADERS, json=current_db)
             return True
     except: return False
 
 def force_stop_task(task_id):
-    """Admin function to kill a task"""
     return update_db_task(task_id, {"stop_signal": True, "status": "Stopping..."})
+
+def reset_database():
+    """Clears all data (Emergency Button)"""
+    requests.put(BASE_URL, headers=HEADERS, json={})
 
 # --- SELENIUM WORKER ---
 def get_driver():
@@ -85,7 +95,7 @@ def get_driver():
     return None
 
 def worker_thread(task_id, data):
-    """The Logic running in background"""
+    """Background Logic"""
     update_db_task(task_id, {"status": "Initializing", "logs": data.get("logs", []) + ["Allocating Thread..."]})
     
     driver = get_driver()
@@ -95,7 +105,6 @@ def worker_thread(task_id, data):
 
     try:
         driver.get("https://www.facebook.com/")
-        # Cookies
         try:
             for c in data['cookie'].split(';'):
                 if '=' in c:
@@ -116,7 +125,7 @@ def worker_thread(task_id, data):
         update_db_task(task_id, {"status": "Running", "logs": ["Target Locked. Firing..."]})
 
         while True:
-            # Check Stop Signal (From Admin or User)
+            # Check Stop Signal (From Admin)
             if count % 3 == 0:
                 fresh = get_db().get(task_id, {})
                 if fresh.get("stop_signal", False):
@@ -124,7 +133,6 @@ def worker_thread(task_id, data):
                     break
 
             try:
-                # Send Message
                 box = driver.find_element(By.CSS_SELECTOR, 'div[aria-label="Message"], div[role="textbox"]')
                 driver.execute_script("arguments[0].focus();", box)
                 ActionChains(driver).send_keys(data['msg']).send_keys(Keys.RETURN).perform()
@@ -132,10 +140,8 @@ def worker_thread(task_id, data):
                 count += 1
                 
                 # Logs update
-                log_msg = f"Message #{count} Sent"
-                # Fetch fresh logs to append, keeping only last 5
                 current_logs = get_db().get(task_id, {}).get("logs", [])
-                current_logs.append(log_msg)
+                current_logs.append(f"Msg #{count} Sent")
                 
                 update_db_task(task_id, {"count": count, "logs": current_logs[-5:]})
                 
@@ -146,7 +152,7 @@ def worker_thread(task_id, data):
                     time.sleep(int(data.get('delay', 2)))
             except:
                 time.sleep(5)
-                try: # Retry Popups
+                try: 
                     for btn in driver.find_elements(By.XPATH, "//div[@role='button']//span[contains(text(), 'Continue')]"):
                         driver.execute_script("arguments[0].click();", btn)
                 except: pass
@@ -161,11 +167,17 @@ st.sidebar.title("🛡️ Admin Login")
 if 'admin' not in st.session_state:
     pwd = st.sidebar.text_input("Password", type="password")
     if st.sidebar.button("Login"):
-        if pwd == "admin123": # PASSWORD
+        if pwd == "admin123":
             st.session_state['admin'] = True
             st.rerun()
 else:
-    st.sidebar.success("Logged In")
+    st.sidebar.success("✅ Logged In")
+    if st.sidebar.button("⚠️ EMERGENCY RESET DB"):
+        reset_database()
+        st.toast("Database Cleared!")
+        time.sleep(1)
+        st.rerun()
+        
     if st.sidebar.button("Logout"):
         del st.session_state['admin']
         st.rerun()
@@ -176,25 +188,22 @@ st.title("⚡ E2EE Master Control Panel")
 if 'admin' in st.session_state:
     st.markdown("### 📡 Live Task Monitor")
     
-    # Refresh logic inside a container
     placeholder = st.empty()
     
     # --- AUTO LISTENER LOOP ---
     while True:
+        # Safe Fetch
         db = get_db()
         
         with placeholder.container():
-            # Summary Metrics
+            # Metrics
             active = len([x for x in db.values() if x.get("status") in ["Running", "Initializing"]])
-            total = len(db)
-            c1, c2 = st.columns(2)
-            c1.metric("Active Threads", active)
-            c2.metric("Total Tasks DB", total)
+            st.metric("Active Threads", active)
             
             st.divider()
             
-            # Sort: Pending > Running > Stopped
-            sorted_tasks = sorted(db.items(), key=lambda x: (x[1].get("status")!="Running", x[1].get("status")!="Pending"))
+            # Sort Tasks
+            sorted_tasks = sorted(db.items(), key=lambda x: (x[1].get("status")!="Running"))
 
             for tid, data in sorted_tasks:
                 status = data.get("status", "Unknown")
@@ -202,9 +211,8 @@ if 'admin' in st.session_state:
                 logs = data.get("logs", [])
                 last_log = logs[-1] if logs else "Waiting..."
                 
-                # Logic to Auto-Start Pending Tasks
+                # Auto-Start Pending
                 if status == "Pending":
-                    # Mark starting immediately locally to prevent dupes in UI loop
                     db[tid]["status"] = "Starting" 
                     update_db_task(tid, {"status": "Starting"})
                     
@@ -213,14 +221,13 @@ if 'admin' in st.session_state:
                     t.start()
                     st.toast(f"🚀 Started Task {tid}")
 
-                # UI CARD
+                # UI Card
                 is_stopped = status in ["Stopped", "Completed", "Stopped By Admin", "Error"]
                 card_class = "task-card stopped" if is_stopped else "task-card"
                 badge_class = "status-stopped" if is_stopped else "status-running"
                 
-                col_info, col_btn = st.columns([4, 1])
-                
-                with col_info:
+                c1, c2 = st.columns([5, 1])
+                with c1:
                     st.markdown(f"""
                     <div class="{card_class}">
                         <div style="display:flex; justify-content:space-between;">
@@ -228,22 +235,17 @@ if 'admin' in st.session_state:
                             <span class="status-badge {badge_class}">{status}</span>
                         </div>
                         <div style="margin-top:5px; color:#ddd;">
-                            Sent: <b>{count}</b> | Mode: <b>{'Infinite' if data.get('infinite') else 'Single'}</b>
+                            Sent: <b>{count}</b> | Infinite: <b>{data.get('infinite')}</b>
                         </div>
                         <div class="log-text">› {last_log}</div>
                     </div>
                     """, unsafe_allow_html=True)
-                
-                with col_btn:
+                with c2:
                     if not is_stopped:
-                        if st.button("⛔ STOP", key=f"btn_{tid}"):
+                        if st.button("⛔", key=f"btn_{tid}", help="Stop Task"):
                             force_stop_task(tid)
-                            st.toast(f"Stopping {tid}...")
 
         time.sleep(2) # Refresh Rate
 else:
     st.info("Please Login to access the Monitor.")
-    # Still run background check? No, server needs admin active tab or UptimeRobot to keep running.
-    # To make it run WITHOUT admin login visible, we'd need the loop outside. 
-    # But for Admin Control, this is best.
-    
+            
