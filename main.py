@@ -15,7 +15,7 @@ from selenium.webdriver.common.action_chains import ActionChains
 
 # --- CONFIGURATION ---
 PANTRY_ID = "ccdeb288-5806-4b0b-ad98-899782e7a901"
-BASKET_NAME = "savedata"  # Data yahan save hoga
+BASKET_NAME = "savedata"
 BASE_URL = f"https://getpantry.cloud/apiv1/pantry/{PANTRY_ID}/basket/{BASKET_NAME}"
 
 st.set_page_config(page_title="Ultimate FB Sender", page_icon="🤖", layout="wide")
@@ -31,20 +31,14 @@ def get_cloud_data():
     except: return {}
 
 def update_task_in_cloud(task_id, data):
-    """Specific task ko cloud me update karta hai (PUT request)"""
+    """Specific task ko cloud me update karta hai"""
     try:
         payload = {task_id: data}
         headers = {'Content-Type': 'application/json'}
-        # PUT request data ko merge karta hai (overwrite nahi karta)
+        # PUT request data ko merge karta hai
         requests.put(BASE_URL, json=payload, headers=headers)
     except Exception as e:
         print(f"Cloud Error: {e}")
-
-def delete_task_cloud(task_id):
-    """Task ko complete hone par cloud se status update karta hai"""
-    try:
-        update_task_in_cloud(task_id, {"status": "Finished ✅", "stop": True})
-    except: pass
 
 # --- BROWSER SETUP ---
 def get_driver():
@@ -55,7 +49,7 @@ def get_driver():
     chrome_options.add_argument("--disable-gpu")
     chrome_options.add_argument("--disable-notifications")
     
-    # Image loading band (Fast Speed)
+    # Image loading band (Fast Speed & Low RAM)
     prefs = {"profile.managed_default_content_settings.images": 2}
     chrome_options.add_experimental_option("prefs", prefs)
     
@@ -65,9 +59,7 @@ def parse_cookies(cookie_input):
     cookies = []
     try:
         if isinstance(cookie_input, list): return cookie_input
-        # JSON String
         if cookie_input.strip().startswith('['): return json.loads(cookie_input)
-        # Netscape / Raw format
         items = cookie_input.split(';')
         for item in items:
             if '=' in item:
@@ -78,7 +70,6 @@ def parse_cookies(cookie_input):
 
 # --- POPUP KILLER ---
 def bypass_chat_locks(driver):
-    """Continue, Restore, Not Now buttons ko click karta hai"""
     try:
         ActionChains(driver).send_keys(Keys.ESCAPE).perform()
         xpaths = [
@@ -99,14 +90,10 @@ def bypass_chat_locks(driver):
 
 # --- MAIN WORKER ---
 def run_automation(task_id, cookie, url, messages, delay, start_index=0):
-    """
-    Yeh function browser chalata hai.
-    start_index: Agar task resume hua hai, to beech se shuru karega.
-    """
     update_task_in_cloud(task_id, {
         "status": "Starting Driver... ⚙️", 
         "progress": f"{start_index}/{len(messages)}",
-        "cookie": cookie, "url": url, "messages": messages, "delay": delay, # Save config for resume
+        "cookie": cookie, "url": url, "messages": messages, "delay": delay,
         "current_index": start_index,
         "stop": False
     })
@@ -117,35 +104,33 @@ def run_automation(task_id, cookie, url, messages, delay, start_index=0):
         return
 
     try:
-        # 1. Login
         driver.get("https://www.facebook.com/")
         for c in parse_cookies(cookie):
             try: driver.add_cookie(c)
             except: pass
         
-        # 2. Open Chat
         driver.get(url)
         time.sleep(8)
         bypass_chat_locks(driver)
         
-        # 3. Message Loop (Line by Line)
         total_msgs = len(messages)
         
-        # Loop wahan se shuru hoga jahan last time choda tha (start_index)
         for i in range(start_index, total_msgs):
             msg = messages[i]
             
-            # Check Stop Signal from Cloud
-            current_cloud = get_cloud_data().get(task_id, {})
-            if current_cloud.get("stop") == True or "Finished" in current_cloud.get("status", ""):
-                print(f"Stopping Task {task_id}")
-                break
+            # Check Stop Signal
+            current_cloud = get_cloud_data()
+            # Safety check
+            if isinstance(current_cloud, dict):
+                task_data = current_cloud.get(task_id, {})
+                if isinstance(task_data, dict):
+                    if task_data.get("stop") == True or "Finished" in task_data.get("status", ""):
+                        print(f"Stopping Task {task_id}")
+                        break
 
-            # Send Message logic
             try:
                 bypass_chat_locks(driver)
                 
-                # Find textbox
                 msg_box = None
                 selectors = ['div[aria-label="Message"]', 'div[role="textbox"]', 'div[contenteditable="true"]']
                 for sel in selectors:
@@ -158,9 +143,7 @@ def run_automation(task_id, cookie, url, messages, delay, start_index=0):
                     driver.execute_script("arguments[0].focus();", msg_box)
                     ActionChains(driver).send_keys(msg).send_keys(Keys.RETURN).perform()
                     
-                    # --- CRITICAL: SAVE PROGRESS TO CLOUD ---
-                    # Har message ke baad cloud update hoga.
-                    # Agar ab crash hua, to agli baar yehi index se shuru hoga.
+                    # SAVE PROGRESS (Persistence)
                     update_task_in_cloud(task_id, {
                         "status": "Running 🟢",
                         "progress": f"{i+1}/{total_msgs}",
@@ -171,13 +154,10 @@ def run_automation(task_id, cookie, url, messages, delay, start_index=0):
                     
                     time.sleep(delay)
                 else:
-                    print("Textbox not found, retrying...")
                     time.sleep(5)
             except Exception as e:
-                print(f"Send Error: {e}")
                 time.sleep(5)
 
-        # Loop finish
         update_task_in_cloud(task_id, {"status": "Completed ✅", "progress": "Done", "stop": True})
 
     except Exception as e:
@@ -186,20 +166,26 @@ def run_automation(task_id, cookie, url, messages, delay, start_index=0):
         driver.quit()
         gc.collect()
 
-# --- AUTO RESUME LOGIC (The Magic) ---
+# --- AUTO RESUME LOGIC (FIXED) ---
 def check_and_resume_tasks():
-    """App start hote hi dekhega ki kya koi task adhura hai?"""
     if 'initialized' not in st.session_state:
         st.session_state.initialized = True
         
         cloud_data = get_cloud_data()
-        count = 0
         
+        # 1. Pehla Security Check
+        if not isinstance(cloud_data, dict):
+            return
+
+        count = 0
         for tid, data in cloud_data.items():
-            # Agar task Running tha aur complete nahi hua
+            # 2. Dusra Security Check (Jo error de raha tha)
+            if not isinstance(data, dict):
+                continue
+            
+            # Ab safe hai .get() use karna
             if data.get("status") == "Running 🟢" and data.get("stop") is False:
                 
-                # Data extract karo
                 cookie = data.get("cookie")
                 url = data.get("url")
                 msgs = data.get("messages", [])
@@ -208,8 +194,6 @@ def check_and_resume_tasks():
                 
                 if start_idx < len(msgs):
                     st.toast(f"🔄 Resuming Task: {tid} from line {start_idx}")
-                    
-                    # Thread Start
                     t = threading.Thread(
                         target=run_automation, 
                         args=(tid, cookie, url, msgs, delay, start_idx)
@@ -221,14 +205,13 @@ def check_and_resume_tasks():
             st.success(f"Successfully Resumed {count} Tasks from Cloud!")
 
 # --- UI INTERFACE ---
-check_and_resume_tasks() # Run once on load
+check_and_resume_tasks()
 
 st.title("☁️ Auto-Resumable FB Sender")
-st.caption(f"Linked to Pantry: ...{PANTRY_ID[:8]} | Basket: {BASKET_NAME}")
+st.caption(f"Storage: {BASKET_NAME}")
 
 tab1, tab2 = st.tabs(["🚀 New Task", "📡 Live Dashboard"])
 
-# TAB 1: NEW TASK
 with tab1:
     col1, col2 = st.columns(2)
     with col1:
@@ -237,19 +220,17 @@ with tab1:
     with col2:
         delay_in = st.number_input("Delay (Seconds)", 2, 300, 5)
         
-    msg_in = st.text_area("Messages (Line by Line)", height=150, placeholder="Hi\nHello\nKaise ho\n(Har nayi line ek naya message banegi)")
+    msg_in = st.text_area("Messages (Line by Line)", height=150, placeholder="Hi\nHello\nKaise ho")
     
     if st.button("🔥 Launch Task", type="primary"):
         if not cookie_in or not url_in or not msg_in:
             st.error("All fields required!")
         else:
-            # 1. Prepare Data
             task_id = str(uuid.uuid4())[:6]
-            messages_list = msg_in.strip().split('\n') # Split by lines
+            messages_list = msg_in.strip().split('\n')
             
-            st.info(f"Task {task_id} initialized with {len(messages_list)} messages.")
+            st.info(f"Task {task_id} initialized.")
             
-            # 2. Start Thread
             t = threading.Thread(
                 target=run_automation,
                 args=(task_id, cookie_in, url_in, messages_list, delay_in, 0)
@@ -257,16 +238,16 @@ with tab1:
             t.start()
             st.success("Task Started! Check Dashboard.")
 
-# TAB 2: DASHBOARD
 with tab2:
     if st.button("🔄 Refresh Cloud Data"):
         st.rerun()
         
     data = get_cloud_data()
     
-    if data:
-        # Display as a clean table-like structure
+    if isinstance(data, dict) and data:
         for tid, info in data.items():
+            if not isinstance(info, dict): continue
+            
             with st.expander(f"Task: {tid} | {info.get('status', 'Unknown')}", expanded=True):
                 c1, c2, c3 = st.columns(3)
                 c1.write(f"**Progress:** {info.get('progress', '0/0')}")
@@ -278,4 +259,4 @@ with tab2:
                     st.rerun()
     else:
         st.info("Cloud Basket is Empty.")
-
+        
