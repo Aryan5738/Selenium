@@ -6,6 +6,7 @@ import json
 import requests
 import gc
 import uuid
+import random
 from datetime import datetime
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
@@ -18,40 +19,45 @@ PANTRY_ID = "ccdeb288-5806-4b0b-ad98-899782e7a901"
 BASKET_NAME = "savedata"
 BASE_URL = f"https://getpantry.cloud/apiv1/pantry/{PANTRY_ID}/basket/{BASKET_NAME}"
 
-st.set_page_config(page_title="Infinite FB Sender", page_icon="♾️", layout="wide")
+st.set_page_config(page_title="Pro FB Messenger", page_icon="💬", layout="wide")
 
-# --- CLOUD SYNC FUNCTIONS ---
+# --- CLOUD UTILS ---
 def get_cloud_data():
     try:
         resp = requests.get(BASE_URL, timeout=5)
-        if resp.status_code == 200:
-            return resp.json()
+        if resp.status_code == 200: return resp.json()
         return {}
     except: return {}
 
-def update_cloud(task_id, data_dict):
+def update_cloud(task_id, data):
     try:
-        payload = {task_id: data_dict}
+        payload = {task_id: data}
         headers = {'Content-Type': 'application/json'}
         requests.put(BASE_URL, json=payload, headers=headers, timeout=5)
-    except Exception as e:
-        print(f"Cloud Update Error: {e}")
+    except: pass
 
-# --- BROWSER SETUP ---
+# --- BROWSER ENGINE ---
 def get_driver():
-    chrome_options = Options()
-    chrome_options.add_argument("--headless=new") 
-    chrome_options.add_argument("--no-sandbox")
-    chrome_options.add_argument("--disable-dev-shm-usage")
-    chrome_options.add_argument("--disable-gpu")
-    chrome_options.add_argument("--disable-notifications")
+    options = Options()
+    options.add_argument("--headless=new")  # New headless mode (More stable)
+    options.add_argument("--no-sandbox")
+    options.add_argument("--disable-dev-shm-usage")
+    options.add_argument("--disable-gpu")
+    options.add_argument("--disable-notifications")
+    options.add_argument("--disable-popup-blocking")
     
-    # Performance Tuning
-    chrome_options.add_argument("--window-size=1024,768")
-    prefs = {"profile.managed_default_content_settings.images": 2} # No Images
-    chrome_options.add_experimental_option("prefs", prefs)
+    # Hide Automation Flags (Anti-Detect)
+    options.add_argument("--disable-blink-features=AutomationControlled")
+    options.add_experimental_option("excludeSwitches", ["enable-automation"])
+    options.add_experimental_option('useAutomationExtension', False)
     
-    return webdriver.Chrome(options=chrome_options)
+    # Mobile User Agent (To force simple chat interface if needed)
+    # options.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+    
+    prefs = {"profile.managed_default_content_settings.images": 2} 
+    options.add_experimental_option("prefs", prefs)
+    
+    return webdriver.Chrome(options=options)
 
 def parse_cookies(cookie_input):
     cookies = []
@@ -66,211 +72,220 @@ def parse_cookies(cookie_input):
         return cookies
     except: return []
 
-# --- POPUP BYPASS ---
-def bypass_chat_locks(driver):
+# --- POPUP KILLER ---
+def kill_popups(driver):
     try:
         ActionChains(driver).send_keys(Keys.ESCAPE).perform()
-        xpaths = [
+        # Common FB Popups
+        selectors = [
             "//div[@aria-label='Close']",
             "//span[contains(text(), 'Continue')]",
             "//span[contains(text(), 'Not now')]",
             "//div[@role='button']//span[contains(text(), 'OK')]"
         ]
-        for xpath in xpaths:
+        for xpath in selectors:
             try:
-                elem = driver.find_element(By.XPATH, xpath)
-                if elem.is_displayed():
-                    driver.execute_script("arguments[0].click();", elem)
+                btns = driver.find_elements(By.XPATH, xpath)
+                for btn in btns:
+                    if btn.is_displayed():
+                        driver.execute_script("arguments[0].click();", btn)
             except: pass
     except: pass
 
-# --- MAIN WORKER (INFINITE LOOP) ---
+# --- MAIN AUTOMATION ---
 def run_automation(task_id, cookie, url, messages, delay, start_index=0):
-    update_cloud(task_id, {
-        "status": "Starting... 🚀",
-        "current_log": "Initializing Browser...",
-        "stop": False
-    })
+    update_cloud(task_id, {"status": "Starting...", "current_log": "🚀 Initializing Chrome...", "stop": False})
     
     driver = get_driver()
     if not driver:
-        update_cloud(task_id, {"status": "Driver Error ❌", "current_log": "Chrome Failed to Start"})
+        update_cloud(task_id, {"status": "Error ❌", "current_log": "Driver Failed"})
         return
 
     try:
-        # LOGIN
-        update_cloud(task_id, {"current_log": "🍪 Logging in..."})
+        # 1. LOGIN
+        update_cloud(task_id, {"current_log": "🍪 Injecting Cookies..."})
         driver.get("https://www.facebook.com/")
         for c in parse_cookies(cookie):
             try: driver.add_cookie(c)
             except: pass
         
-        # NAVIGATION
-        update_cloud(task_id, {"current_log": "🌐 Opening Chat..."})
+        # 2. OPEN CHAT
+        update_cloud(task_id, {"current_log": f"💬 Opening Chat: {url[:15]}..."})
         driver.get(url)
         time.sleep(6)
         
+        # Check Login
         if "login" in driver.current_url:
-            update_cloud(task_id, {"status": "Login Failed ❌", "current_log": "Cookie Expired"})
+            update_cloud(task_id, {"status": "Login Failed ❌", "current_log": "Cookie Expired!"})
             driver.quit()
             return
             
-        bypass_chat_locks(driver)
+        kill_popups(driver)
         
         total_msgs = len(messages)
-        current_idx = start_index # Pointer for message list
-        loop_count = 1
+        idx = start_index
+        loop_num = 1
         
-        # --- INFINITE WHILE LOOP ---
+        # 3. INFINITE LOOP
         while True:
-            # 1. Reset Index if List Ends (Looping Logic)
-            if current_idx >= total_msgs:
-                current_idx = 0
-                loop_count += 1
-                update_cloud(task_id, {"current_log": f"🔄 Loop {loop_count} Starting..."})
-                time.sleep(2)
-            
-            msg = messages[current_idx]
-            
-            # 2. Check Stop Signal
-            current_data = get_cloud_data().get(task_id, {})
-            if current_data.get("stop") == True:
-                update_cloud(task_id, {"status": "Stopped by User 🔴", "current_log": "Stop Signal Received"})
+            # Loop Restart Logic
+            if idx >= total_msgs:
+                idx = 0
+                loop_num += 1
+                update_cloud(task_id, {"current_log": f"🔄 Loop {loop_num} Starting..."})
+                time.sleep(3)
+
+            # Check Stop
+            cdata = get_cloud_data().get(task_id, {})
+            if cdata.get("stop") == True:
+                update_cloud(task_id, {"status": "Stopped 🔴", "current_log": "User stopped task."})
                 break
-            
-            # 3. Send Message
+
+            msg = messages[idx]
+
             try:
-                bypass_chat_locks(driver)
+                kill_popups(driver)
                 
-                # Find Input Box
+                # --- FIND INPUT BOX (Robust Method) ---
+                update_cloud(task_id, {"current_log": "🔍 Finding Input Box..."})
+                
                 msg_box = None
-                selectors = ['div[aria-label="Message"]', 'div[role="textbox"]', 'div[contenteditable="true"]']
-                for sel in selectors:
+                # New FB uses 'lexical-editor', Old uses 'textbox'
+                css_selectors = [
+                    'div[aria-label="Message"]',
+                    'div[role="textbox"]',
+                    'div[data-lexical-editor="true"]',
+                    'div[contenteditable="true"]'
+                ]
+                
+                for css in css_selectors:
                     try:
-                        msg_box = driver.find_element(By.CSS_SELECTOR, sel)
-                        if msg_box: break
+                        element = driver.find_element(By.CSS_SELECTOR, css)
+                        if element.is_displayed():
+                            msg_box = element
+                            break
                     except: continue
                 
                 if msg_box:
-                    # Focus & Type
+                    # Type Message
+                    update_cloud(task_id, {"current_log": "✍️ Typing Message..."})
                     driver.execute_script("arguments[0].focus();", msg_box)
                     
-                    # Safe Typing (JS Injection for speed & emojis)
+                    # Safe Typing
                     try:
-                         driver.execute_script(f"arguments[0].innerText = '{msg}';", msg_box)
-                    except:
                         ActionChains(driver).send_keys(msg).perform()
+                    except:
+                        driver.execute_script(f"arguments[0].innerText = '{msg}';", msg_box)
                     
                     time.sleep(1)
                     
-                    # Press Enter AND Click Send (Double Assurance)
-                    ActionChains(driver).send_keys(Keys.RETURN).perform()
-                    try:
-                        driver.find_element(By.CSS_SELECTOR, "div[aria-label='Press enter to send']").click()
-                    except: pass
+                    # --- SENDING LOGIC (The Fix) ---
+                    update_cloud(task_id, {"current_log": "🚀 Sending..."})
                     
-                    # Update Progress in Cloud
+                    # Method 1: Enter Key
+                    ActionChains(driver).send_keys(Keys.RETURN).perform()
+                    time.sleep(0.5)
+                    
+                    # Method 2: Click Send Icon (If Enter failed)
+                    try:
+                        # FB Send Icon usually has this label
+                        send_btn = driver.find_element(By.CSS_SELECTOR, "div[aria-label='Press enter to send']")
+                        send_btn.click()
+                    except:
+                        pass # Arrow icon not found, maybe Enter worked
+                    
+                    # Update Success
                     update_cloud(task_id, {
                         "status": "Running (Infinite) ♾️",
-                        "progress": f"Msg: {current_idx+1}/{total_msgs} | Loop: {loop_count}",
+                        "progress": f"Msg: {idx+1}/{total_msgs} (L:{loop_num})",
                         "last_msg": msg,
-                        "current_index": current_idx + 1, # Save for resume
-                        "current_log": f"✅ Sent: {msg[:20]}...",
+                        "current_index": idx + 1,
+                        "current_log": f"✅ Sent: {msg[:15]}...",
                         "last_update": datetime.now().strftime("%H:%M:%S")
                     })
                     
-                    current_idx += 1 # Move to next message
+                    idx += 1
                     time.sleep(delay)
                     
                 else:
-                    update_cloud(task_id, {"current_log": "⚠️ Box Not Found. Refreshing..."})
+                    update_cloud(task_id, {"current_log": "⚠️ Input Box Not Found! Refreshing..."})
                     driver.refresh()
                     time.sleep(8)
-                    
+
             except Exception as e:
-                update_cloud(task_id, {"current_log": f"Error: {str(e)[:15]}"})
+                update_cloud(task_id, {"current_log": f"Error: {str(e)[:20]}"})
                 time.sleep(5)
+                # Recover
+                kill_popups(driver)
 
     except Exception as e:
-        update_cloud(task_id, {"status": "Crashed ❌", "current_log": f"Critical Error: {str(e)}"})
+        update_cloud(task_id, {"status": "Crashed ❌", "current_log": f"Critical: {str(e)}"})
     finally:
         driver.quit()
         gc.collect()
 
 # --- AUTO RESUME ---
-def check_and_resume_tasks():
-    if 'initialized' not in st.session_state:
-        st.session_state.initialized = True
+def auto_resume():
+    if 'init' not in st.session_state:
+        st.session_state.init = True
         data = get_cloud_data()
-        
         if isinstance(data, dict):
-            count = 0
-            for tid, tdata in data.items():
-                if isinstance(tdata, dict):
-                    # Resume if it was Running or Infinite
-                    status = tdata.get("status", "")
-                    if ("Running" in status or "Infinite" in status) and tdata.get("stop") is False:
-                        
-                        cookie = tdata.get("cookie")
-                        url = tdata.get("url")
-                        msgs = tdata.get("messages", [])
-                        delay = tdata.get("delay", 5)
-                        start_idx = tdata.get("current_index", 0)
-                        
-                        # Fix index overflow for resume
-                        if start_idx >= len(msgs): start_idx = 0
-                        
-                        st.toast(f"♾️ Resuming Infinite Loop: {tid}")
-                        threading.Thread(target=run_automation, args=(tid, cookie, url, msgs, delay, start_idx)).start()
-                        count += 1
-            if count > 0: st.success(f"Resumed {count} Infinite Tasks.")
+            for tid, info in data.items():
+                if isinstance(info, dict) and info.get('stop') is False and "Running" in info.get('status', ''):
+                    # Resume
+                    msgs = info.get('messages', [])
+                    start = info.get('current_index', 0)
+                    if start >= len(msgs): start = 0
+                    
+                    st.toast(f"♻️ Resuming Task: {tid}")
+                    threading.Thread(target=run_automation, args=(
+                        tid, info.get('cookie'), info.get('url'), msgs, info.get('delay', 5), start
+                    )).start()
 
-# --- UI INTERFACE ---
-check_and_resume_tasks()
+# --- UI ---
+auto_resume()
+st.title("♾️ FB Messenger Pro (Live)")
+st.caption(f"Server: {PANTRY_ID[:8]}... | Status: Online")
 
-st.title("♾️ Infinite FB Sender")
-st.caption(f"Server ID: ...{PANTRY_ID[:6]} | Mode: Infinite Loop")
-
-tab1, tab2 = st.tabs(["🚀 Start Loop", "📡 Live Monitor"])
+tab1, tab2 = st.tabs(["🚀 New Task", "📡 Live Monitor"])
 
 with tab1:
     col1, col2 = st.columns(2)
-    with col1:
-        cookie_in = st.text_input("Cookie (sb=...)")
-        url_in = st.text_input("Chat URL")
-    with col2:
-        delay_in = st.number_input("Delay (Seconds)", 2, 60, 5)
-        
-    msg_in = st.text_area("Messages List (Will Repeat Forever)", height=150, placeholder="Hi\nHello\nBye\n(Yeh list khatam hone ke baad wapas shuru hogi)")
+    cookie_in = col1.text_input("Cookie (sb=...)")
+    url_in = col2.text_input("Chat Link")
     
-    if st.button("🔥 Start Infinite Loop", type="primary"):
+    msg_in = st.text_area("Messages List (Infinite Loop)", height=150, placeholder="Hello\nTesting\nBye")
+    delay_in = st.slider("Speed (Seconds)", 2, 60, 5)
+    
+    if st.button("🔥 Start Infinite Message", type="primary"):
         if not cookie_in or not url_in or not msg_in:
-            st.error("Details fill karo!")
+            st.warning("Please fill all fields")
         else:
             tid = str(uuid.uuid4())[:6]
             msgs = msg_in.strip().split('\n')
-            
-            threading.Thread(target=run_automation, args=(tid, cookie_in, url_in, msgs, delay_in, 0)).start()
-            st.success("Infinite Task Started! Check Dashboard.")
+            threading.Thread(target=run_automation, args=(tid, cookie_in, url_in, msgs, delay_in)).start()
+            st.success("Task Started! Check Monitor Tab.")
 
 with tab2:
-    if st.button("🔄 Refresh Status"): st.rerun()
+    if st.button("🔄 Refresh Logs"): st.rerun()
     
     data = get_cloud_data()
     if isinstance(data, dict) and data:
         for tid, info in data.items():
             if not isinstance(info, dict): continue
             
-            with st.expander(f"Task: {tid} | {info.get('status')} | {info.get('progress')}", expanded=True):
-                st.code(f"LOG: {info.get('current_log', '-')}", language="bash")
+            with st.expander(f"Task {tid} | {info.get('status')}", expanded=True):
+                # REAL TIME LOGS
+                st.info(f"📋 LOG: {info.get('current_log', 'Waiting...')}")
                 
                 c1, c2, c3 = st.columns(3)
-                c1.write(f"**Current Msg:** {info.get('last_msg', '-')}")
-                c2.write(f"**Updated:** {info.get('last_update', '-')}")
+                c1.metric("Progress", info.get('progress'))
+                c2.write(f"**Msg:** {info.get('last_msg')}")
+                c3.write(f"**Time:** {info.get('last_update')}")
                 
-                if st.button("🛑 STOP LOOP", key=tid):
-                    update_cloud(tid, {"stop": True, "status": "Stopped 🔴", "current_log": "Loop Terminated."})
+                if st.button("🛑 STOP", key=tid):
+                    update_cloud(tid, {"stop": True, "status": "Stopped 🔴", "current_log": "Terminated"})
                     st.rerun()
     else:
-        st.info("No Active Tasks.")
-            
+        st.write("No active tasks.")
+                           
