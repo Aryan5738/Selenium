@@ -4,164 +4,179 @@ import shutil
 import threading
 import uuid
 import datetime
+import random
 import streamlit as st
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.common.by import By
 from selenium.webdriver.common.keys import Keys
-from selenium.webdriver.common.action_chains import ActionChains
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
 
 # --- PAGE CONFIG ---
-st.set_page_config(page_title="UltraStable FB Sender", layout="wide")
-st.title("🚀 Pro Background Messenger")
+st.set_page_config(page_title="Multi-Sticker FB Sender", layout="centered")
+st.title("FB Multi-Sticker Bot 🚀")
 
-# --- GLOBAL TASK MANAGER ---
 @st.cache_resource
 class TaskManager:
     def __init__(self):
         self.tasks = {}
 
     def create_task(self):
-        task_id = str(uuid.uuid4())[:6].upper()
+        task_id = str(uuid.uuid4())[:8]
         self.tasks[task_id] = {
             "status": "Running",
             "logs": [],
             "count": 0,
             "stop": False,
-            "start_time": datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
+            "start_time": datetime.datetime.now()
         }
         return task_id
 
+    def get_task(self, task_id):
+        return self.tasks.get(task_id)
+
     def log_update(self, task_id, message):
         if task_id in self.tasks:
-            timestamp = datetime.datetime.now().strftime("%H:%M")
-            # Circular log: Keep only last 50 entries to save memory
-            self.tasks[task_id]["logs"] = (self.tasks[task_id]["logs"] + [f"[{timestamp}] {message}"]) [-50:]
+            timestamp = datetime.datetime.now().strftime("%H:%M:%S")
+            self.tasks[task_id]["logs"].append(f"[{timestamp}] {message}")
 
     def stop_task(self, task_id):
         if task_id in self.tasks:
             self.tasks[task_id]["stop"] = True
-            self.tasks[task_id]["status"] = "Manual Stop"
+            self.tasks[task_id]["status"] = "Stopped"
 
 manager = TaskManager()
 
-# --- OPTIMIZED DRIVER ---
-def get_optimized_driver():
+# --- SELENIUM HELPERS ---
+def get_driver():
     chrome_options = Options()
-    chrome_options.add_argument("--headless=new") # Faster headless mode
+    chrome_options.add_argument("--headless")
     chrome_options.add_argument("--no-sandbox")
     chrome_options.add_argument("--disable-dev-shm-usage")
-    chrome_options.add_argument("--disable-gpu")
-    chrome_options.add_argument("--blink-settings=imagesEnabled=false") # Don't load images (Save RAM)
-    chrome_options.add_argument("--window-size=1920,1080")
     
-    # Auto-detect paths
-    paths = ["/usr/bin/chromedriver", "/usr/local/bin/chromedriver"]
-    driver_path = next((p for p in paths if os.path.exists(p)), shutil.which("chromedriver"))
-    
-    try:
-        service = Service(driver_path) if driver_path else Service()
+    chromedriver_path = shutil.which("chromedriver") or "/usr/bin/chromedriver"
+    chromium_path = shutil.which("chromium") or "/usr/bin/chromium"
+
+    if os.path.exists(chromedriver_path):
+        chrome_options.binary_location = chromium_path
+        service = Service(chromedriver_path)
         return webdriver.Chrome(service=service, options=chrome_options)
-    except:
-        return None
+    return None
+
+def send_random_sticker(driver, task_id):
+    try:
+        # 1. Sticker Icon dhoondna aur click karna
+        sticker_icons = [
+            "//div[@aria-label='Choose a sticker']",
+            "//div[@aria-label='Stickers']",
+            "//span[contains(@class, 'x10l6tqk')]//div[@role='button']"
+        ]
+        
+        btn = None
+        for xpath in sticker_icons:
+            try:
+                btn = WebDriverWait(driver, 5).until(EC.element_to_be_clickable((By.XPATH, xpath)))
+                if btn: break
+            except: continue
+        
+        if btn:
+            driver.execute_script("arguments[0].click();", btn)
+            time.sleep(3) # Panel load hone ka wait
+            
+            # 2. Saare visible stickers ki list nikalna
+            # Hum image tags ya gridcells ko target karte hain
+            stickers = driver.find_elements(By.CSS_SELECTOR, "div[role='gridcell'] img, img[src*='static.xx.fbcdn.net/rsrc.php/v3']")
+            
+            if stickers:
+                # Randomly ek sticker select karna list se (e.g., pehle 10 mein se)
+                max_choice = min(len(stickers), 12)
+                random_index = random.randint(0, max_choice - 1)
+                target_sticker = stickers[random_index]
+                
+                manager.log_update(task_id, f"Selecting sticker variation #{random_index + 1}")
+                driver.execute_script("arguments[0].click();", target_sticker)
+                return True
+            else:
+                manager.log_update(task_id, "No stickers found in the panel.")
+        return False
+    except Exception as e:
+        manager.log_update(task_id, f"Sticker Send Error: {str(e)[:50]}")
+        return False
 
 # --- BACKGROUND WORKER ---
-def run_stable_task(task_id, cookie_str, url, msg, delay, is_infinite):
-    manager.log_update(task_id, "System Initializing...")
-    driver = get_optimized_driver()
+def run_background_task(task_id, cookie_str, url, delay, is_infinite):
+    manager.log_update(task_id, "Starting background driver...")
+    driver = get_driver()
     
     if not driver:
-        manager.log_update(task_id, "CRITICAL: Driver failure.")
-        manager.tasks[task_id]["status"] = "Driver Error"
+        manager.log_update(task_id, "Driver Error: Check environment setup.")
+        manager.tasks[task_id]["status"] = "Failed"
         return
 
     try:
-        # Load FB
         driver.get("https://www.facebook.com/")
-        
-        # Inject Cookies
         for item in cookie_str.split(';'):
             if '=' in item:
-                name, val = item.strip().split('=', 1)
-                driver.add_cookie({'name': name, 'value': val, 'domain': '.facebook.com'})
+                name, value = item.strip().split('=', 1)
+                driver.add_cookie({'name': name, 'value': value, 'domain': '.facebook.com'})
         
+        manager.log_update(task_id, "Navigating to Chat...")
         driver.get(url)
-        time.sleep(10) # Initial load wait
+        time.sleep(8)
         
         while not manager.tasks[task_id]["stop"]:
-            try:
-                # 1. Look for message box
-                selectors = ['div[aria-label="Message"]', 'div[role="textbox"]', '[contenteditable="true"]']
-                msg_box = None
-                for s in selectors:
-                    try:
-                        msg_box = driver.find_element(By.CSS_SELECTOR, s)
-                        if msg_box: break
-                    except: continue
-
-                if msg_box:
-                    # Clear and Send
-                    driver.execute_script("arguments[0].focus();", msg_box)
-                    ActionChains(driver).send_keys(msg).send_keys(Keys.RETURN).perform()
-                    
-                    manager.tasks[task_id]["count"] += 1
-                    manager.log_update(task_id, f"Success | Total: {manager.tasks[task_id]['count']}")
-                    
-                    if not is_infinite: break
-                    time.sleep(delay)
-                else:
-                    manager.log_update(task_id, "Waiting for chat to load...")
-                    driver.refresh() # Refresh if stuck
-                    time.sleep(15)
-
-            except Exception as e:
-                manager.log_update(task_id, f"Retrying... (Network/FB Lag)")
+            success = send_random_sticker(driver, task_id)
+            
+            if success:
+                manager.tasks[task_id]["count"] += 1
+                manager.log_update(task_id, f"✅ Done: Total {manager.tasks[task_id]['count']} multi-stickers sent.")
+                if not is_infinite: break
+                time.sleep(delay)
+            else:
+                manager.log_update(task_id, "Trying to refresh UI...")
+                driver.refresh()
                 time.sleep(10)
 
     except Exception as e:
-        manager.log_update(task_id, f"Fatal Error: {str(e)[:50]}")
+        manager.log_update(task_id, f"Fatal Error: {str(e)}")
     finally:
         driver.quit()
-        if not manager.tasks[task_id]["stop"]:
-            manager.tasks[task_id]["status"] = "Completed/Idle"
+        if manager.tasks[task_id]["status"] == "Running":
+            manager.tasks[task_id]["status"] = "Completed"
 
-# --- UI ---
-t1, t2 = st.tabs(["⚡ Deployment", "📊 Live Monitor"])
+# --- STREAMLIT UI ---
+tab1, tab2 = st.tabs(["🚀 Start Task", "📊 Monitor"])
 
-with t1:
-    col1, col2 = st.columns([2, 1])
-    with col1:
-        c_input = st.text_area("Session Cookies", placeholder="c_user=...; xs=...", height=100)
-        u_input = st.text_input("Target URL", "https://www.facebook.com/messages/t/...")
-    with col2:
-        m_input = st.text_input("Message Content", "Hello!")
-        d_input = st.number_input("Interval (Seconds)", 5, 3600, 30)
-        inf_mode = st.checkbox("Keep running forever", True)
+with tab1:
+    cookies = st.text_area("FB Cookies (c_user=...; xs=...;)", height=100)
+    chat_url = st.text_input("Messenger Chat URL", placeholder="https://www.facebook.com/messages/t/...")
+    
+    col1, col2 = st.columns(2)
+    loop = col1.checkbox("Infinite Sending", value=True)
+    wait_time = col2.number_input("Wait between stickers (sec)", 5, 600, 20)
 
-    if st.button("🚀 Deploy to Background"):
-        if c_input and u_input:
-            tid = manager.create_task()
-            threading.Thread(target=run_stable_task, args=(tid, c_input, u_input, m_input, d_input, inf_mode), daemon=True).start()
-            st.success(f"Deployment Successful! ID: {tid}")
+    if st.button("Launch Multi-Sticker Bot"):
+        if cookies and chat_url:
+            new_id = manager.create_task()
+            threading.Thread(target=run_background_task, args=(new_id, cookies, chat_url, wait_time, loop)).start()
+            st.success(f"Task Launched! ID: {new_id}")
         else:
-            st.warning("Data missing.")
+            st.warning("Please fill in Cookies and Chat URL.")
 
-with t2:
-    search_id = st.text_input("Enter Active ID to Monitor")
+with tab2:
+    search_id = st.text_input("Check ID Status")
     if search_id:
-        data = manager.get_task(search_id)
-        if data:
-            c1, c2, c3 = st.columns(3)
-            c1.metric("Status", data["status"])
-            c2.metric("Sent", data["count"])
-            c3.metric("Started", data["start_time"])
-            
-            st.code("\n".join(data["logs"]))
-            
-            if st.button("🔴 Kill Process"):
+        task = manager.get_task(search_id)
+        if task:
+            st.metric("Total Stickers Sent", task["count"])
+            st.info(f"Current Status: {task['status']}")
+            with st.expander("Live Logs"):
+                st.code("\n".join(task["logs"]))
+            if st.button("Stop Process"):
                 manager.stop_task(search_id)
                 st.rerun()
         else:
-            st.error("ID not found.")
-    
+            st.error("Task ID not found.")
+                
