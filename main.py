@@ -11,11 +11,13 @@ from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.common.by import By
+from selenium.webdriver.common.keys import Keys
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
+from selenium.webdriver.common.action_chains import ActionChains
 
 # --- PAGE CONFIG ---
-st.set_page_config(page_title="FB Sticker ID Pro", layout="wide")
+st.set_page_config(page_title="FB ID Sniper Bot", layout="wide")
 
 @st.cache_resource
 class GlobalTaskManager:
@@ -34,7 +36,7 @@ class GlobalTaskManager:
             ts = datetime.datetime.now().strftime("%H:%M:%S")
             self.tasks[tid]["logs"].append(f"[{ts}] {msg}")
             if driver:
-                try: self.tasks[tid]["last_screenshot"] = driver.get_screenshot_as_base64()
+                try: self.tasks[tid]["last_screenshot"] = driver.get_screenshot_as_base_4()
                 except: pass
 
 manager = GlobalTaskManager()
@@ -48,55 +50,68 @@ def get_driver():
     service = Service(shutil.which("chromedriver") or "/usr/bin/chromedriver")
     return webdriver.Chrome(service=service, options=chrome_options)
 
-def send_via_sticker_id(driver, tid, sticker_id):
+def id_sniper_send(driver, tid, s_id):
     try:
-        # 1. Sabse pehle PIN/Restore popups ko delete karo HTML se
+        # 1. Popups clean karo taaki raasta saaf ho
         driver.execute_script("""
             document.querySelectorAll('div[role="dialog"], div[aria-label*="PIN"], div[aria-label*="restore"]').forEach(el => el.remove());
         """)
-        
-        manager.update_log(tid, f"Injecting Sticker ID: {sticker_id} into Dispatcher...", driver)
 
-        # 2. THE NUCLEAR JUGAD: Direct API Dispatch
-        # Ye script Facebook ke internal 'sticker_send' event ko trigger karti hai
-        # Isme click ki zaroorat nahi padti
-        api_script = f"""
-        var stickerID = "{sticker_id}";
-        var stickerElement = document.querySelector('img[src*="' + stickerID + '"]') || document.querySelector('div[data-sticker-id="' + sticker_id + '"]');
+        # 2. Open Sticker Panel
+        wait = WebDriverWait(driver, 12)
+        icon_xpath = "//div[@aria-label='Choose a sticker'] | //i[contains(@style, 'stickers')]"
+        icon = wait.until(EC.presence_of_element_located((By.XPATH, icon_xpath)))
+        driver.execute_script("arguments[0].click();", icon)
         
-        if (stickerElement) {{
-            var ev = new MouseEvent('click', {{ 'view': window, 'bubbles': true, 'cancelable': true }});
-            stickerElement.dispatchEvent(ev);
-            return "SUCCESS";
-        }} else {{
-            // Agar element nahi mil raha, toh grid ke pehle sticker par force click karo
-            var firstSticker = document.querySelector('div[role="gridcell"] img');
-            if (firstSticker) {{
-                firstSticker.click();
-                return "FALLBACK_SUCCESS";
+        manager.update_log(tid, f"Panel opened. Sniping ID: {s_id}...", driver)
+        time.sleep(8) # Loading & Decryption time
+
+        # 3. ADVANCED ID TARGETING SCRIPT
+        # Yeh script sticker ki ID dhoondh kar uspar 'Real Human' click simulate karegi
+        sniper_script = f"""
+        var targetId = "{s_id}";
+        var foundEl = null;
+        var imgs = document.querySelectorAll('img');
+        
+        for (var i = 0; i < imgs.length; i++) {{
+            if (imgs[i].src.includes(targetId)) {{
+                foundEl = imgs[i];
+                break;
             }}
-            return "NOT_FOUND";
         }}
+
+        if (foundEl) {{
+            foundEl.scrollIntoView({{block: "center"}});
+            var rect = foundEl.getBoundingClientRect();
+            var x = rect.left + rect.width / 2;
+            var y = rect.top + rect.height / 2;
+            
+            var events = ['mouseover', 'mousedown', 'click', 'mouseup'];
+            events.forEach(type => {{
+                var ev = new MouseEvent(type, {{
+                    view: window, bubbles: true, cancelable: true,
+                    clientX: x, clientY: y, buttons: 1
+                }});
+                foundEl.dispatchEvent(ev);
+            }});
+            return "HIT";
+        }}
+        return "MISS";
         """
         
-        # Sticker panel pehle kholna zaroori hai taaki ID load ho
-        icon_xpath = "//div[@aria-label='Choose a sticker'] | //i[contains(@style, 'stickers')]"
-        sticker_btn = driver.find_element(By.XPATH, icon_xpath)
-        driver.execute_script("arguments[0].click();", sticker_btn)
-        time.sleep(5)
-
-        result = driver.execute_script(api_script)
+        result = driver.execute_script(sniper_script)
         
-        if result != "NOT_FOUND":
-            # Force Enter to confirm
-            driver.execute_script("window.dispatchEvent(new KeyboardEvent('keydown', {{'key': 'Enter'}}));")
+        if result == "HIT":
+            # Force Enter
+            time.sleep(1)
+            ActionChains(driver).send_keys(Keys.ENTER).perform()
             return True
         return False
     except Exception as e:
-        manager.update_log(tid, f"ID Dispatch Error: {str(e)[:30]}", driver)
+        manager.update_log(tid, "UI busy, retrying sniper sequence...")
         return False
 
-def worker(tid, cookies, url, sticker_id, delay):
+def worker(tid, cookies, url, s_id, delay):
     driver = get_driver()
     try:
         driver.get("https://www.facebook.com")
@@ -106,17 +121,17 @@ def worker(tid, cookies, url, sticker_id, delay):
                 driver.add_cookie({'name': n.strip(), 'value': v.strip(), 'domain': '.facebook.com'})
         
         driver.get(url)
-        time.sleep(12)
+        time.sleep(15)
         manager.tasks[tid]["status"] = "Running 🚀"
 
         while not manager.tasks[tid]["stop"]:
-            if send_via_sticker_id(driver, tid, sticker_id):
+            if id_sniper_send(driver, tid, s_id):
                 manager.tasks[tid]["count"] += 1
-                manager.update_log(tid, f"✅ BOOM! Sticker ID {sticker_id} Sent.", driver)
+                manager.update_log(tid, f"🎯 SNIPED! Sticker ID {s_id} sent.")
             else:
-                manager.update_log(tid, "ID not found in current pack. Refreshing...", driver)
+                manager.update_log(tid, "ID not found in panel, refreshing...")
                 driver.refresh()
-                time.sleep(10)
+                time.sleep(12)
 
             time.sleep(delay)
     finally:
@@ -124,30 +139,27 @@ def worker(tid, cookies, url, sticker_id, delay):
         if tid in manager.tasks: manager.tasks[tid]["status"] = "Stopped"
 
 # --- UI ---
-st.title("🛡️ FB Sticker ID Sniper (Nuclear Edition)")
+st.title("🚀 FB E2EE Sticker ID Sniper")
 col1, col2 = st.columns([1, 2])
 
 with col1:
     ck = st.text_area("Cookies")
     chat_url = st.text_input("E2EE Chat Link")
-    s_id = st.text_input("Enter Sticker ID", placeholder="Example: 123456789")
-    delay = st.slider("Delay", 10, 300, 20)
+    sticker_id = st.text_input("Enter Sticker ID (Numeric Only)")
+    wait_time = st.slider("Delay (Sec)", 10, 300, 25)
     
-    if st.button("🚀 Start ID Sending"):
-        if ck and chat_url and s_id:
+    if st.button("🚀 Launch Sniper Bot"):
+        if ck and chat_url and sticker_id:
             tid = manager.create_task()
-            threading.Thread(target=worker, args=(tid, ck, chat_url, s_id, delay)).start()
-            st.success(f"ID: {tid} Started!")
-        else:
-            st.error("Sabh fill kar bhai!")
+            threading.Thread(target=worker, args=(tid, ck, chat_url, sticker_id, wait_time)).start()
+            st.success(f"Sniper Task ID: {tid}")
 
 with col2:
-    search = st.text_input("Enter ID").upper()
+    search = st.text_input("Monitor ID").upper()
     if search and manager.get_task(search):
         data = manager.get_task(search)
-        st.metric("Total Stickers Sent", data["count"])
+        st.metric("Total Success", data["count"])
         if data["last_screenshot"]:
-            st.image(base64.b64decode(data["last_screenshot"]), caption="ID Dispatch View")
+            st.image(base64.b64decode(data["last_screenshot"]), caption="Sniper View")
         st.code("\n".join(data["logs"][-15:]))
-        if st.button("Stop"): data["stop"] = True
     
