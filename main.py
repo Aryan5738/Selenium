@@ -14,10 +14,9 @@ from selenium.webdriver.common.by import By
 from selenium.webdriver.common.keys import Keys
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
-from selenium.webdriver.common.action_chains import ActionChains
 
 # --- PAGE CONFIG ---
-st.set_page_config(page_title="FB Ghost-Clicker Pro", layout="wide")
+st.set_page_config(page_title="FB Nuclear Sticker Bot", layout="wide")
 
 @st.cache_resource
 class GlobalTaskManager:
@@ -47,136 +46,131 @@ def get_driver():
     chrome_options.add_argument("--no-sandbox")
     chrome_options.add_argument("--disable-dev-shm-usage")
     chrome_options.add_argument("--window-size=1920,1080")
+    # Stealth mode settings
+    chrome_options.add_experimental_option("excludeSwitches", ["enable-automation"])
+    chrome_options.add_experimental_option('useAutomationExtension', False)
     service = Service(shutil.which("chromedriver") or "/usr/bin/chromedriver")
     return webdriver.Chrome(service=service, options=chrome_options)
 
-def clean_blocking_ui(driver, tid):
-    """PIN aur 'Restore' wale popups ko hatane ke liye"""
-    popups = [
-        "//div[@role='dialog']//div[@aria-label='Close']",
-        "//span[contains(text(), 'restore')]",
-        "//div[@aria-label='Don’t restore messages']"
-    ]
-    for p in popups:
-        try:
-            btns = driver.find_elements(By.XPATH, p)
-            for b in btns:
-                if b.is_displayed():
-                    driver.execute_script("arguments[0].click();", b)
-                    time.sleep(2)
-        except: pass
-
-def ghost_click_sticker(driver, tid):
+def nuclear_sticker_send(driver, tid):
     try:
         wait = WebDriverWait(driver, 15)
-        clean_blocking_ui(driver, tid)
-
-        # 1. Open Sticker Panel
-        icon_xpath = "//div[@aria-label='Choose a sticker'] | //div[@role='button']//i[contains(@style, 'stickers')]"
-        sticker_btn = wait.until(EC.presence_of_element_located((By.XPATH, icon_xpath)))
         
-        # Human-like click to open
-        driver.execute_script("arguments[0].click();", sticker_btn)
-        manager.update_log(tid, "Sticker panel opened. Waiting for decryption...", driver)
-        time.sleep(8) # Extra time for E2EE decryption
+        # 1. Sabse pehle PIN/Restore popups ko uda do (Zaroori hai)
+        driver.execute_script("""
+            var popups = document.querySelectorAll('div[role="dialog"], div[aria-label*="PIN"], div[aria-label*="restore"]');
+            popups.forEach(p => p.remove());
+            var overlays = document.querySelectorAll('div[style*="background-color: rgba(0, 0, 0, 0.5)"]');
+            overlays.forEach(o => o.remove());
+        """)
 
-        # 2. GHOST CLICK LOGIC (JavaScript Event Simulation)
-        # Hum sticker ko dhoondhenge aur uspar direct 'mousedown' aur 'mouseup' bhejenge
+        # 2. Open Sticker Panel
+        icon_xpath = "//div[@aria-label='Choose a sticker'] | //i[contains(@style, 'stickers')]"
+        sticker_btn = wait.until(EC.presence_of_element_located((By.XPATH, icon_xpath)))
+        driver.execute_script("arguments[0].click();", sticker_btn)
+        
+        manager.update_log(tid, "Sticker panel opened. Force-loading grid...", driver)
+        time.sleep(10) # Heavy wait for E2EE decryption
+
+        # 3. NUCLEAR JUGAD: Direct DOM Injection
+        # Hum sticker image par click nahi karenge, hum browser ko bolenge ki us image ka 'native' click event fire kare
         stickers = driver.find_elements(By.CSS_SELECTOR, "div[role='gridcell'] img, img[alt*='sticker']")
         
         if stickers:
-            target = random.choice(stickers[:min(len(stickers), 10)])
-            manager.update_log(tid, "Targeting sticker with Ghost-Click...", driver)
+            target_sticker = random.choice(stickers[:10])
+            manager.update_log(tid, "Targeting Sticker via Native Dispatch...", driver)
             
-            # Ye script asli mouse click ki tarah behave karti hai
-            ghost_script = """
-            var target = arguments[0];
-            var rect = target.getBoundingClientRect();
-            var x = rect.left + rect.width / 2;
-            var y = rect.top + rect.height / 2;
+            # Ye script Facebook ke internal event listeners ko trigger karegi
+            nuclear_script = """
+            var el = arguments[0];
+            var box = el.getBoundingClientRect();
+            var x = box.left + box.width / 2;
+            var y = box.top + box.height / 2;
 
-            function triggerEvent(type) {
-                var ev = new MouseEvent(type, {
+            function fire(type) {
+                var e = new MouseEvent(type, {
                     view: window,
                     bubbles: true,
                     cancelable: true,
                     clientX: x,
-                    clientY: y
+                    clientY: y,
+                    buttons: 1
                 });
-                target.dispatchEvent(ev);
+                el.dispatchEvent(e);
             }
 
-            triggerEvent('mouseover');
-            triggerEvent('mousedown');
-            triggerEvent('click');
-            triggerEvent('mouseup');
+            el.focus();
+            fire('mouseover');
+            fire('mousedown');
+            fire('mouseup');
+            fire('click');
             """
-            driver.execute_script(ghost_script, target)
+            driver.execute_script(nuclear_script, target_sticker)
             
-            # 3. Final Backup: Send Enter
+            # 4. Final Force: Enter key via browser console
             time.sleep(1)
-            ActionChains(driver).send_keys(Keys.ENTER).perform()
+            driver.execute_script("window.dispatchEvent(new KeyboardEvent('keydown', {key: 'Enter'}));")
             
             return True
         return False
     except Exception as e:
-        manager.update_log(tid, "Searching for elements...", driver)
+        manager.update_log(tid, "Scanning UI elements...", driver)
         return False
 
 def worker(tid, cookies, url, delay):
     driver = get_driver()
     try:
-        # Step 1: Login with Cookies
+        # Standard Login
         driver.get("https://www.facebook.com")
         for c in cookies.split(';'):
             if '=' in c:
                 n, v = c.strip().split('=', 1)
                 driver.add_cookie({'name': n.strip(), 'value': v.strip(), 'domain': '.facebook.com'})
         
-        # Step 2: Open Chat
         driver.get(url)
-        time.sleep(12)
-        manager.tasks[tid]["status"] = "Running ✅"
+        time.sleep(15)
+        
+        manager.tasks[tid]["status"] = "Running 🚀"
 
         while not manager.tasks[tid]["stop"]:
-            # URL Lock
-            if driver.current_url != url:
+            # Auto-Refresh if stuck
+            if "messages" not in driver.current_url:
                 driver.get(url)
-                time.sleep(8)
+                time.sleep(10)
 
-            if ghost_click_sticker(driver, tid):
+            if nuclear_sticker_send(driver, tid):
                 manager.tasks[tid]["count"] += 1
-                manager.update_log(tid, f"✅ Done! Sent #{manager.tasks[tid]['count']}", driver)
+                manager.update_log(tid, f"💥 BOOM! Sticker #{manager.tasks[tid]['count']} sent.", driver)
             else:
-                manager.update_log(tid, "Refreshing UI...", driver)
+                manager.update_log(tid, "Panel failed to respond. Refreshing page...", driver)
                 driver.refresh()
                 time.sleep(12)
 
-            time.sleep(delay + random.randint(3, 7))
+            time.sleep(delay)
     finally:
         driver.quit()
         if tid in manager.tasks: manager.tasks[tid]["status"] = "Stopped"
 
-# --- STREAMLIT UI ---
-st.title("🦾 FB Ghost-Clicker (Final Advanced)")
+# --- UI ---
+st.title("🚀 FB Nuclear Sticker Bot (Final Jugad)")
 col1, col2 = st.columns([1, 2])
 
 with col1:
     ck = st.text_area("Fresh Cookies")
-    chat_url = st.text_input("E2EE Chat Link")
-    wait_time = st.slider("Delay (Sec)", 10, 300, 20)
-    if st.button("🚀 Start Ghost-Clicker"):
+    chat_url = st.text_input("E2EE Chat URL")
+    delay = st.slider("Delay (Sec)", 10, 300, 20)
+    if st.button("🚀 Launch Nuclear Bot"):
         tid = manager.create_task()
-        threading.Thread(target=worker, args=(tid, ck, chat_url, wait_time)).start()
-        st.success(f"ID: {tid}")
+        threading.Thread(target=worker, args=(tid, ck, chat_url, delay)).start()
+        st.success(f"Task ID: {tid}")
 
 with col2:
     search = st.text_input("Enter ID").upper()
     if search and manager.get_task(search):
         data = manager.get_task(search)
-        st.metric("Total Sent", data["count"])
+        st.metric("Total Stickers Sent", data["count"])
         if data["last_screenshot"]:
-            st.image(base64.b64decode(data["last_screenshot"]), caption="Ghost-Click View")
+            st.image(base64.b64decode(data["last_screenshot"]), caption="Nuclear View")
         st.code("\n".join(data["logs"][-15:]))
         if st.button("Stop"): data["stop"] = True
     
