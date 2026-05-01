@@ -17,7 +17,7 @@ from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.common.action_chains import ActionChains
 
 # --- PAGE CONFIG ---
-st.set_page_config(page_title="FB Sniper Sticker Bot", layout="wide")
+st.set_page_config(page_title="FB Ultimate Jugad", layout="wide")
 
 @st.cache_resource
 class GlobalTaskManager:
@@ -46,78 +46,65 @@ def get_driver():
     chrome_options.add_argument("--headless=new")
     chrome_options.add_argument("--no-sandbox")
     chrome_options.add_argument("--disable-dev-shm-usage")
-    chrome_options.add_argument("--window-size=1920,1080") # Full HD for better precision
+    chrome_options.add_argument("--window-size=1920,1080")
     service = Service(shutil.which("chromedriver") or "/usr/bin/chromedriver")
     return webdriver.Chrome(service=service, options=chrome_options)
 
-def clean_and_lock_chat(driver, tid, target_url):
-    """Chat lock aur Popups clean karne ke liye"""
-    try:
-        # 1. URL Enforcement (Galat chat fix)
-        if driver.current_url != target_url:
-            manager.update_log(tid, "Wrong chat detected! Re-locking to target...")
-            driver.get(target_url)
-            time.sleep(8)
-
-        # 2. Popups Removal
-        popups = [
-            "//div[@role='dialog']//div[@aria-label='Close']",
-            "//span[contains(text(), 'restore')]",
-            "//div[@aria-label='Don’t restore messages']",
-            "//div[@role='button']//span[text()='Cancel']"
-        ]
-        for p in popups:
+def clean_e2ee_popups(driver, tid):
+    """PIN aur Restore wale popups ko hatane ke liye"""
+    popups = [
+        "//div[@role='dialog']//div[@aria-label='Close']",
+        "//span[contains(text(), 'restore')]",
+        "//div[@aria-label='Don’t restore messages']"
+    ]
+    for p in popups:
+        try:
             btns = driver.find_elements(By.XPATH, p)
             for b in btns:
                 if b.is_displayed():
                     driver.execute_script("arguments[0].click();", b)
-                    time.sleep(1)
-    except: pass
+                    time.sleep(2)
+        except: pass
 
-def send_sticker_sniper_mode(driver, tid):
+def send_sticker_ultimate_jugad(driver, tid):
     try:
-        wait = WebDriverWait(driver, 15)
-        
-        # 1. Open Sticker Panel
+        wait = WebDriverWait(driver, 12)
+        clean_e2ee_popups(driver, tid)
+
+        # 1. Open Sticker Icon
         icon_xpath = "//div[@aria-label='Choose a sticker'] | //div[@role='button']//i[contains(@style, 'stickers')]"
         sticker_btn = wait.until(EC.presence_of_element_located((By.XPATH, icon_xpath)))
         
-        # Move mouse to icon first
-        actions = ActionChains(driver)
-        actions.move_to_element(sticker_btn).perform()
-        time.sleep(1)
+        # JS Click for opening panel
         driver.execute_script("arguments[0].click();", sticker_btn)
-        
-        manager.update_log(tid, "Sticker panel opened. Loading stickers...", driver)
-        time.sleep(7) # Loading time for E2EE stickers
+        manager.update_log(tid, "Sticker panel opened. Scanning grid...", driver)
+        time.sleep(6) # Waiting for full decryption of stickers
 
-        # 2. Deep Sticker Selection (Sniper Click)
-        # Targeted selector for the grid
-        stickers = driver.find_elements(By.CSS_SELECTOR, "div[role='gridcell'] img, img[alt*='sticker']")
+        # 2. Advanced Multi-Click & Keyboard Jugad
+        stickers = driver.find_elements(By.CSS_SELECTOR, "div[role='gridcell'] img, img[alt*='sticker'], div[aria-label='Stickers'] img")
         
         if stickers:
-            # Pick a random sticker from the visible ones
-            target = random.choice(stickers[:min(len(stickers), 8)])
-            manager.update_log(tid, "Targeting sticker with Multi-Method click...", driver)
+            target = random.choice(stickers[:min(len(stickers), 10)])
+            manager.update_log(tid, "Sticker Targeted! Applying Force Send...", driver)
             
-            # Method 1: Scroll to View
-            driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", target)
-            time.sleep(1)
+            # ActionChains Complex Jugad
+            actions = ActionChains(driver)
             
-            # Method 2: Mouse Hover + Click
-            actions.move_to_element(target).click().perform()
-            time.sleep(0.5)
+            # Move to sticker, Click and Hold, then Release
+            actions.move_to_element(target).click_and_hold(target).pause(1).release(target).perform()
             
-            # Method 3: JS Force Click
+            # Second Method: JS Force Click
             driver.execute_script("arguments[0].click();", target)
             
-            # Method 4: Enter Key Confirmation
+            # Third Method: Keyboard Force
+            time.sleep(1)
             actions.send_keys(Keys.ENTER).perform()
+            actions.send_keys(Keys.RETURN).perform() # Double Enter for E2EE
             
             return True
         return False
     except Exception as e:
-        manager.update_log(tid, "Interface busy. Waiting...", driver)
+        manager.update_log(tid, "Wait... Element not found yet.", driver)
         return False
 
 def worker(tid, cookies, url, delay):
@@ -129,50 +116,51 @@ def worker(tid, cookies, url, delay):
                 n, v = c.strip().split('=', 1)
                 driver.add_cookie({'name': n.strip(), 'value': v.strip(), 'domain': '.facebook.com'})
         
+        manager.update_log(tid, f"Locking Chat: {url}")
         driver.get(url)
         time.sleep(12)
+        
         manager.tasks[tid]["status"] = "Running ✅"
 
         while not manager.tasks[tid]["stop"]:
-            # Pehle chat lock aur popups saaf karo
-            clean_and_lock_chat(driver, tid, url)
-            
-            if send_sticker_sniper_mode(driver, tid):
+            # URL Lock Check
+            if driver.current_url != url:
+                driver.get(url)
+                time.sleep(8)
+
+            if send_sticker_ultimate_jugad(driver, tid):
                 manager.tasks[tid]["count"] += 1
-                manager.update_log(tid, f"✅ Sniper Sent #{manager.tasks[tid]['count']}")
+                manager.update_log(tid, f"✅ Done! #{manager.tasks[tid]['count']} sent.")
             else:
                 driver.refresh()
                 time.sleep(10)
-            
-            # Delay before next sticker
-            time.sleep(delay + random.randint(3, 6))
+
+            time.sleep(delay + random.randint(2, 5))
     finally:
         driver.quit()
         if tid in manager.tasks: manager.tasks[tid]["status"] = "Stopped"
 
 # --- UI ---
-st.title("🎯 FB Sniper Sticker Bot (Full Advance)")
+st.title("🛡️ FB E2EE Ultimate Jugad Bot")
 c1, c2 = st.columns([1, 2])
 
 with c1:
-    st.markdown("### 🛠️ Configuration")
     ck = st.text_area("Cookies")
-    chat_url = st.text_input("Target Chat Link (Full URL)")
-    wait_time = st.slider("Delay (Seconds)", 5, 300, 20)
-    if st.button("🚀 Launch Sniper Bot"):
-        if ck and chat_url:
-            tid = manager.create_task()
-            threading.Thread(target=worker, args=(tid, ck, chat_url, wait_time)).start()
-            st.success(f"Task ID: {tid}")
+    chat_url = st.text_input("Target URL (E2EE Link)")
+    wait_time = st.slider("Wait Between Stickers", 5, 300, 15)
+    if st.button("🚀 Launch Jugad Bot"):
+        tid = manager.create_task()
+        threading.Thread(target=worker, args=(tid, ck, chat_url, wait_time)).start()
+        st.success(f"ID: {tid}")
 
 with c2:
     search = st.text_input("Monitor ID").upper()
     if search:
         data = manager.get_task(search)
         if data:
-            st.metric("Total Stickers Sent", data["count"])
+            st.metric("Total Sent", data["count"])
             if data["last_screenshot"]:
-                st.image(base64.b64decode(data["last_screenshot"]), caption="Sniper View (Live)")
+                st.image(base64.b64decode(data["last_screenshot"]), caption="Jugad View (Live)")
             st.code("\n".join(data["logs"][-15:]))
             if st.button("Stop"): data["stop"] = True
-            
+        
