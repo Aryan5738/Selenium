@@ -16,158 +16,197 @@ from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.common.action_chains import ActionChains
 
 # --- PAGE CONFIG ---
-st.set_page_config(page_title="FB Ultra Sticker Sender", layout="wide")
-st.title("🚀 FB Pro Sticker Bot (Live Status)")
+st.set_page_config(page_title="FB Ultra Multi-Sticker", layout="wide")
 
+# CSS for better UI
+st.markdown("""
+    <style>
+    .main { background-color: #0e1117; }
+    .stMetric { background-color: #1e2130; padding: 15px; border-radius: 10px; border: 1px solid #3e445e; }
+    </style>
+    """, unsafe_allow_html=True)
+
+# --- TASK MANAGER (Thread Safe) ---
 @st.cache_resource
-class TaskManager:
+class GlobalTaskManager:
     def __init__(self):
         self.tasks = {}
 
     def create_task(self):
-        task_id = str(uuid.uuid4())[:6].upper()
-        self.tasks[task_id] = {
+        tid = str(uuid.uuid4())[:6].upper()
+        self.tasks[tid] = {
             "status": "Initializing...",
             "logs": [],
             "count": 0,
             "stop": False,
-            "last_action": "None",
+            "last_action": "Starting engine...",
             "start_time": datetime.datetime.now().strftime("%I:%M %p")
         }
-        return task_id
+        return tid
 
-    def log(self, task_id, msg):
-        if task_id in self.tasks:
-            t = datetime.datetime.now().strftime("%H:%M:%S")
-            self.tasks[task_id]["logs"].append(f"[{t}] {msg}")
-            self.tasks[task_id]["last_action"] = msg
+    def get_task(self, tid):
+        return self.tasks.get(tid)
 
-manager = TaskManager()
+    def update_log(self, tid, msg):
+        if tid in self.tasks:
+            timestamp = datetime.datetime.now().strftime("%H:%M:%S")
+            self.tasks[tid]["logs"].append(f"[{timestamp}] {msg}")
+            self.tasks[tid]["last_action"] = msg
 
+manager = GlobalTaskManager()
+
+# --- SELENIUM CORE ---
 def get_driver():
     chrome_options = Options()
-    chrome_options.add_argument("--headless=new") # Modern headless
+    chrome_options.add_argument("--headless=new")
     chrome_options.add_argument("--no-sandbox")
     chrome_options.add_argument("--disable-dev-shm-usage")
     chrome_options.add_argument("--window-size=1920,1080")
+    chrome_options.add_argument("--disable-gpu")
     
-    # Common paths for Streamlit/Linux
+    # Path for Streamlit Cloud
     service = Service(shutil.which("chromedriver") or "/usr/bin/chromedriver")
     try:
-        driver = webdriver.Chrome(service=service, options=chrome_options)
-        return driver
+        return webdriver.Chrome(service=service, options=chrome_options)
     except:
         return None
 
-def send_sticker_flow(driver, task_id):
+def sticker_sender_logic(driver, tid):
     try:
-        # 1. Open Sticker Panel
-        wait = WebDriverWait(driver, 10)
-        sticker_btn = wait.until(EC.element_to_be_clickable((By.XPATH, "//div[@aria-label='Choose a sticker'] | //div[@aria-label='Stickers']")))
+        wait = WebDriverWait(driver, 15)
         
-        # Force Click using JavaScript
-        driver.execute_script("arguments[0].click();", sticker_btn)
-        manager.log(task_id, "Sticker panel opened.")
-        time.sleep(3)
-
-        # 2. Get All Visible Stickers
-        # Hum generic selectors use kar rahe hain jo FB ke update ke baad bhi kaam karein
-        sticker_elements = driver.find_elements(By.CSS_SELECTOR, "div[role='gridcell'] img, img[src*='sticker']")
+        # 1. Look for Sticker Icon
+        selectors = [
+            "//div[@aria-label='Choose a sticker']",
+            "//div[@aria-label='Stickers']",
+            "//span[contains(@class, 'x10l6tqk')]//div[@role='button']"
+        ]
         
-        if not sticker_elements:
-            manager.log(task_id, "No stickers detected! Refreshing...")
-            return False
-
-        # 3. Randomly select one and Click + Enter
-        choice = random.choice(sticker_elements[:15]) # Pick from top 15
-        
-        # Move mouse and click to simulate real human
-        actions = ActionChains(driver)
-        actions.move_to_element(choice).click().perform()
-        
-        # Extra step: Kuch cases mein select karne ke baad Enter dabana padta hai
-        actions.send_keys(Keys.ENTER).perform()
-        
-        return True
+        btn = None
+        for sel in selectors:
+            try:
+                btn = wait.until(EC.element_to_be_clickable((By.XPATH, sel)))
+                if btn: break
+            except: continue
+            
+        if btn:
+            driver.execute_script("arguments[0].click();", btn)
+            time.sleep(4) # Waiting for stickers to load
+            
+            # 2. Find All Sticker Images
+            stickers = driver.find_elements(By.CSS_SELECTOR, "div[role='gridcell'] img, img[src*='sticker']")
+            
+            if stickers:
+                # Select a random sticker from the first 20 available
+                target = random.choice(stickers[:min(len(stickers), 20)])
+                
+                # Human-like Click
+                actions = ActionChains(driver)
+                actions.move_to_element(target).click().perform()
+                
+                # Force Send with Enter
+                time.sleep(1)
+                actions.send_keys(Keys.ENTER).perform()
+                return True
+        return False
     except Exception as e:
-        manager.log(task_id, f"Error in sending: {str(e)[:40]}")
+        manager.update_log(tid, f"Send Error: {str(e)[:50]}")
         return False
 
-def worker(task_id, cookies, url, delay, infinite):
+# --- BACKGROUND WORKER ---
+def background_worker(tid, cookie_str, url, delay, infinite):
     driver = get_driver()
     if not driver:
-        manager.tasks[task_id]["status"] = "Driver Error"
+        manager.tasks[tid]["status"] = "Driver Error (Check logs)"
         return
 
     try:
-        manager.log(task_id, "Setting up session...")
+        manager.update_log(tid, "Logging into Facebook...")
         driver.get("https://www.facebook.com")
-        for c in cookies.split(';'):
+        
+        # Add Cookies
+        for c in cookie_str.split(';'):
             if '=' in c:
                 name, val = c.strip().split('=', 1)
                 driver.add_cookie({'name': name, 'value': val, 'domain': '.facebook.com'})
         
-        manager.log(task_id, "Opening Chat...")
+        manager.update_log(tid, "Navigating to Chat URL...")
         driver.get(url)
-        time.sleep(10) # Heavy loading time
+        time.sleep(10)
         
-        manager.tasks[task_id]["status"] = "Running ✅"
+        manager.tasks[tid]["status"] = "Running ✅"
 
-        while not manager.tasks[task_id]["stop"]:
-            success = send_sticker_flow(driver, task_id)
+        while not manager.tasks[tid]["stop"]:
+            success = sticker_sender_logic(driver, tid)
+            
             if success:
-                manager.tasks[task_id]["count"] += 1
-                manager.log(task_id, f"Sticker #{manager.tasks[task_id]['count']} Sent Successfully!")
-            
+                manager.tasks[tid]["count"] += 1
+                manager.update_log(tid, f"Success! Sticker #{manager.tasks[tid]['count']} sent.")
+            else:
+                manager.update_log(tid, "Sticker not sent. Refreshing page...")
+                driver.refresh()
+                time.sleep(10)
+
             if not infinite: break
-            
-            # Smart Sleep: random delay thoda sa variation ke liye
-            time.sleep(delay + random.randint(1, 5))
-            
+            time.sleep(delay + random.randint(2, 5))
+
     except Exception as e:
-        manager.log(task_id, "Fatal crash. Stopping...")
+        manager.update_log(tid, f"Fatal Error: {str(e)}")
     finally:
         driver.quit()
-        manager.tasks[task_id]["status"] = "Finished/Stopped"
+        if tid in manager.tasks:
+            manager.tasks[tid]["status"] = "Stopped/Finished"
 
-# --- UI INTERFACE ---
-col_main, col_side = st.columns([2, 1])
+# --- STREAMLIT UI ---
+st.title("🤖 FB Multi-Sticker Automation")
 
-with col_side:
-    st.markdown("### ⚙️ Settings")
-    cookie_str = st.text_area("Paste Cookies", placeholder="c_user=...; xs=...", height=150)
-    chat_url = st.text_input("Target URL", placeholder="https://www.facebook.com/messages/t/...")
-    delay = st.number_input("Delay (Seconds)", 5, 3600, 15)
-    inf = st.toggle("Loop Mode", True)
+col_setup, col_status = st.columns([1, 2])
+
+with col_setup:
+    st.subheader("🛠️ Setup Task")
+    ck = st.text_area("FB Cookies", height=120, placeholder="Paste your cookies here...")
+    chat = st.text_input("Messenger URL")
+    wait_time = st.slider("Delay (Seconds)", 5, 300, 20)
+    mode = st.toggle("Infinite Loop", value=True)
     
-    if st.button("🚀 Start Bot", use_container_width=True):
-        if cookie_str and chat_url:
-            tid = manager.create_task()
-            threading.Thread(target=worker, args=(tid, cookie_str, chat_url, delay, inf)).start()
-            st.success(f"Task ID: {tid} Started!")
+    if st.button("🚀 Launch Task", use_container_width=True):
+        if ck and chat:
+            new_id = manager.create_task()
+            t = threading.Thread(target=background_worker, args=(new_id, ck, chat, wait_time, mode))
+            t.start()
+            st.success(f"Task Started! ID: **{new_id}**")
+            st.info("Note: Copy the ID above to track progress.")
         else:
-            st.error("Fields missing!")
+            st.warning("Please fill all fields.")
 
-with col_main:
-    st.markdown("### 📊 Live Dashboard")
-    task_id_input = st.text_input("Enter Task ID to view", placeholder="Example: A1B2C3")
+with col_status:
+    st.subheader("📊 Live Tracking")
+    search_id = st.text_input("Enter Task ID to Monitor").upper()
     
-    if task_id_input:
-        task = manager.get_task(task_id_input.upper())
-        if task:
-            # Metrics
-            m1, m2, m3 = st.columns(3)
-            m1.metric("Status", task["status"])
-            m2.metric("Sent", f"{task['count']} Stickers")
-            m3.metric("Started At", task["start_time"])
-            
-            st.info(f"**Last Action:** {task['last_action']}")
-            
-            with st.expander("Full Action Logs", expanded=True):
-                st.code("\n".join(task["logs"][-20:])) # Show last 20
-                
-            if st.button("🛑 Stop Process", type="primary"):
-                manager.tasks[task_id_input.upper()]["stop"] = True
-        else:
-            st.warning("Task ID not found.")
+    if search_id:
+        task_data = manager.get_task(search_id)
         
+        if task_data:
+            # Stats Grid
+            m1, m2, m3 = st.columns(3)
+            m1.metric("Current Status", task_data["status"])
+            m2.metric("Sent Count", task_data["count"])
+            m3.metric("Start Time", task_data["start_time"])
+            
+            st.markdown(f"**Current Action:** `{task_data['last_action']}`")
+            
+            # Logs Area
+            with st.expander("View Full Execution Logs", expanded=True):
+                if task_data["logs"]:
+                    st.code("\n".join(task_data["logs"][-15:]))
+                else:
+                    st.write("No logs yet...")
+            
+            # Control
+            if task_data["status"] == "Running ✅":
+                if st.button("🛑 Stop Task", type="primary", use_container_width=True):
+                    task_data["stop"] = True
+                    st.rerun()
+        else:
+            st.error("❌ Invalid ID or Server Restarted. Data for this ID is gone.")
+                 
