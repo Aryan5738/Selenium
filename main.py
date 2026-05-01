@@ -14,9 +14,10 @@ from selenium.webdriver.common.by import By
 from selenium.webdriver.common.keys import Keys
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
+from selenium.webdriver.common.action_chains import ActionChains
 
 # --- PAGE CONFIG ---
-st.set_page_config(page_title="FB Force Sticker Pro", layout="wide")
+st.set_page_config(page_title="FB E2EE Special Bot", layout="wide")
 
 @st.cache_resource
 class GlobalTaskManager:
@@ -45,117 +46,119 @@ def get_driver():
     chrome_options.add_argument("--headless=new")
     chrome_options.add_argument("--no-sandbox")
     chrome_options.add_argument("--disable-dev-shm-usage")
-    # Mobile User Agent for better stability
-    chrome_options.add_argument("--user-agent=Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Mobile Safari/537.36")
+    chrome_options.add_argument("--window-size=1600,900")
     service = Service(shutil.which("chromedriver") or "/usr/bin/chromedriver")
     return webdriver.Chrome(service=service, options=chrome_options)
 
-def send_sticker_mobile(driver, tid):
+def send_sticker_e2ee(driver, tid):
     try:
         wait = WebDriverWait(driver, 15)
         
-        # 1. Look for Sticker Icon in Mobile View
-        # Mobile Messenger (m.facebook.com) uses different classes
-        manager.update_log(tid, "Searching for sticker icon...")
-        icon_selectors = [
-            "//div[@aria-label='Stickers']",
+        # 1. E2EE Special Sticker Icon Search
+        # E2EE chats mein aria-label 'Choose a sticker' aksar nested hota hai
+        manager.update_log(tid, "Searching for E2EE sticker icon...")
+        
+        icon_xpaths = [
             "//div[@aria-label='Choose a sticker']",
-            "//i[contains(@class, 'sticker')]",
-            "//div[@role='button' and contains(@aria-label, 'Sticker')]"
+            "//div[@role='button']//i[contains(@style, 'stickers')]",
+            "//div[contains(@aria-label, 'sticker')]"
         ]
         
         btn = None
-        for s in icon_selectors:
+        for path in icon_xpaths:
             try:
-                btn = wait.until(EC.element_to_be_clickable((By.XPATH, s)))
+                btn = wait.until(EC.presence_of_element_located((By.XPATH, path)))
                 if btn: break
             except: continue
             
         if btn:
+            # Scroll and Click
+            driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", btn)
+            time.sleep(1)
             driver.execute_script("arguments[0].click();", btn)
-            manager.update_log(tid, "Panel Opened. Selecting sticker...", driver)
-            time.sleep(5) 
+            manager.update_log(tid, "E2EE Panel opened. Scanning stickers...", driver)
+            
+            time.sleep(7) # Encrypted panel takes longer to load
 
-            # 2. Select first visible sticker
-            stickers = driver.find_elements(By.CSS_SELECTOR, "div[role='gridcell'] img, img[src*='sticker']")
+            # 2. Deep scan for sticker images
+            # E2EE mein images ka structure alag hota hai
+            stickers = driver.find_elements(By.CSS_SELECTOR, "div[role='gridcell'] img, div[aria-label='Stickers'] img, img[alt*='sticker']")
             
             if stickers:
-                target = random.choice(stickers[:min(len(stickers), 15)])
+                # Select a random one
+                target = random.choice(stickers[:min(len(stickers), 12)])
+                manager.update_log(tid, "Sticker found! Sending...", driver)
+                
+                # Double force click
                 driver.execute_script("arguments[0].click();", target)
+                time.sleep(1)
+                # Confirm with Enter in case of E2EE confirmation
+                ActionChains(driver).send_keys(Keys.ENTER).perform()
                 return True
             else:
-                manager.update_log(tid, "No stickers found in panel.", driver)
+                manager.update_log(tid, "Panel empty or stickers hidden.", driver)
         return False
     except Exception as e:
-        manager.update_log(tid, f"Error: {str(e)[:30]}", driver)
+        manager.update_log(tid, f"Interaction Error: {str(e)[:30]}", driver)
         return False
 
-def worker(tid, cookies, target, delay):
+def worker(tid, cookies, e2ee_url, delay):
     driver = get_driver()
     try:
-        # Pre-Login
-        driver.get("https://m.facebook.com")
+        manager.update_log(tid, "Logging in...")
+        driver.get("https://www.facebook.com")
         for c in cookies.split(';'):
             if '=' in c:
                 n, v = c.strip().split('=', 1)
                 driver.add_cookie({'name': n.strip(), 'value': v.strip(), 'domain': '.facebook.com'})
         
-        # Determine Mobile Chat URL
-        # Mobile view chat link pattern
-        if target.isdigit():
-            chat_url = f"https://m.facebook.com/messages/read/?tid=cid.c.{target}%3A{target}"
-        else:
-            # Fallback to general messenger
-            chat_url = f"https://www.facebook.com/messages/t/{target}"
-            
-        manager.update_log(tid, f"Navigating to: {chat_url}")
-        driver.get(chat_url)
-        time.sleep(10)
+        manager.update_log(tid, f"Opening E2EE Chat: {e2ee_url}")
+        driver.get(e2ee_url)
+        time.sleep(15) # Encrypted chats need more time to decrypt in browser
         
         manager.tasks[tid]["status"] = "Running ✅"
         while not manager.tasks[tid]["stop"]:
-            if send_sticker_mobile(driver, tid):
+            if send_sticker_e2ee(driver, tid):
                 manager.tasks[tid]["count"] += 1
-                manager.update_log(tid, f"✅ Done! Sent #{manager.tasks[tid]['count']}", driver)
+                manager.update_log(tid, f"✅ Sticker #{manager.tasks[tid]['count']} sent.")
             else:
-                manager.update_log(tid, "Sticker failed. Refreshing...", driver)
+                manager.update_log(tid, "Failed to send. Refreshing session...")
                 driver.refresh()
-                time.sleep(10)
+                time.sleep(12)
             
-            time.sleep(delay)
+            time.sleep(delay + random.randint(2, 5))
+            
     except Exception as e: manager.update_log(tid, f"Fatal: {e}")
     finally:
         driver.quit()
         manager.tasks[tid]["status"] = "Stopped"
 
-# --- UI ---
-st.title("🔥 FB Ultra Pro Sticker Bot")
+# --- STREAMLIT UI ---
+st.title("🛡️ FB E2EE Pro Sticker Bot")
 
-tab_l, tab_r = st.tabs(["🚀 Setup", "📊 Status"])
+col1, col2 = st.columns([1, 2])
 
-with tab_l:
-    ck = st.text_area("Cookies (c_user=...; xs=...;)")
-    target_id = st.text_input("User UID / Username")
-    speed = st.number_input("Delay", 10, 300, 20)
-    if st.button("Launch Bot"):
-        tid = manager.create_task()
-        threading.Thread(target=worker, args=(tid, ck, target_id, speed)).start()
-        st.success(f"Started! ID: {tid}")
+with col1:
+    st.info("E2EE Chat detected. Please ensure cookies are fresh.")
+    ck = st.text_area("Cookies")
+    # Yahan link auto-detect hoga aapke input se
+    chat_link = st.text_input("E2EE Chat URL", placeholder="https://www.facebook.com/messages/e2ee/t/...")
+    wait_time = st.number_input("Interval (Seconds)", 10, 300, 20)
+    
+    if st.button("🚀 Launch E2EE Bot", use_container_width=True):
+        if ck and chat_link:
+            tid = manager.create_task()
+            threading.Thread(target=worker, args=(tid, ck, chat_link, wait_time)).start()
+            st.success(f"Task Started! ID: {tid}")
 
-with tab_r:
-    search = st.text_input("Monitor ID").upper()
+with col2:
+    search = st.text_input("Track Task ID").upper()
     if search:
         data = manager.get_task(search)
         if data:
-            col1, col2 = st.columns(2)
-            col1.metric("Stickers Sent", data["count"])
-            col2.metric("Status", data["status"])
-            
+            st.metric("Total Sent", data["count"])
             if data["last_screenshot"]:
-                st.subheader("📸 Browser Live Preview")
-                st.image(base64.b64decode(data["last_screenshot"]), use_container_width=True)
-            
-            with st.expander("Logs"):
-                st.code("\n".join(data["logs"][-15:]))
+                st.image(base64.b64decode(data["last_screenshot"]), caption="E2EE Live View", use_container_width=True)
+            st.code("\n".join(data["logs"][-15:]))
             if st.button("Stop"): data["stop"] = True
         
