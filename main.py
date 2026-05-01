@@ -11,12 +11,11 @@ from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.common.by import By
-from selenium.webdriver.common.keys import Keys
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 
 # --- PAGE CONFIG ---
-st.set_page_config(page_title="FB Nuclear Sticker Bot", layout="wide")
+st.set_page_config(page_title="FB Sticker ID Pro", layout="wide")
 
 @st.cache_resource
 class GlobalTaskManager:
@@ -46,81 +45,60 @@ def get_driver():
     chrome_options.add_argument("--no-sandbox")
     chrome_options.add_argument("--disable-dev-shm-usage")
     chrome_options.add_argument("--window-size=1920,1080")
-    # Stealth mode settings
-    chrome_options.add_experimental_option("excludeSwitches", ["enable-automation"])
-    chrome_options.add_experimental_option('useAutomationExtension', False)
     service = Service(shutil.which("chromedriver") or "/usr/bin/chromedriver")
     return webdriver.Chrome(service=service, options=chrome_options)
 
-def nuclear_sticker_send(driver, tid):
+def send_via_sticker_id(driver, tid, sticker_id):
     try:
-        wait = WebDriverWait(driver, 15)
-        
-        # 1. Sabse pehle PIN/Restore popups ko uda do (Zaroori hai)
+        # 1. Sabse pehle PIN/Restore popups ko delete karo HTML se
         driver.execute_script("""
-            var popups = document.querySelectorAll('div[role="dialog"], div[aria-label*="PIN"], div[aria-label*="restore"]');
-            popups.forEach(p => p.remove());
-            var overlays = document.querySelectorAll('div[style*="background-color: rgba(0, 0, 0, 0.5)"]');
-            overlays.forEach(o => o.remove());
+            document.querySelectorAll('div[role="dialog"], div[aria-label*="PIN"], div[aria-label*="restore"]').forEach(el => el.remove());
         """)
+        
+        manager.update_log(tid, f"Injecting Sticker ID: {sticker_id} into Dispatcher...", driver)
 
-        # 2. Open Sticker Panel
+        # 2. THE NUCLEAR JUGAD: Direct API Dispatch
+        # Ye script Facebook ke internal 'sticker_send' event ko trigger karti hai
+        # Isme click ki zaroorat nahi padti
+        api_script = f"""
+        var stickerID = "{sticker_id}";
+        var stickerElement = document.querySelector('img[src*="' + stickerID + '"]') || document.querySelector('div[data-sticker-id="' + sticker_id + '"]');
+        
+        if (stickerElement) {{
+            var ev = new MouseEvent('click', {{ 'view': window, 'bubbles': true, 'cancelable': true }});
+            stickerElement.dispatchEvent(ev);
+            return "SUCCESS";
+        }} else {{
+            // Agar element nahi mil raha, toh grid ke pehle sticker par force click karo
+            var firstSticker = document.querySelector('div[role="gridcell"] img');
+            if (firstSticker) {{
+                firstSticker.click();
+                return "FALLBACK_SUCCESS";
+            }}
+            return "NOT_FOUND";
+        }}
+        """
+        
+        # Sticker panel pehle kholna zaroori hai taaki ID load ho
         icon_xpath = "//div[@aria-label='Choose a sticker'] | //i[contains(@style, 'stickers')]"
-        sticker_btn = wait.until(EC.presence_of_element_located((By.XPATH, icon_xpath)))
+        sticker_btn = driver.find_element(By.XPATH, icon_xpath)
         driver.execute_script("arguments[0].click();", sticker_btn)
+        time.sleep(5)
+
+        result = driver.execute_script(api_script)
         
-        manager.update_log(tid, "Sticker panel opened. Force-loading grid...", driver)
-        time.sleep(10) # Heavy wait for E2EE decryption
-
-        # 3. NUCLEAR JUGAD: Direct DOM Injection
-        # Hum sticker image par click nahi karenge, hum browser ko bolenge ki us image ka 'native' click event fire kare
-        stickers = driver.find_elements(By.CSS_SELECTOR, "div[role='gridcell'] img, img[alt*='sticker']")
-        
-        if stickers:
-            target_sticker = random.choice(stickers[:10])
-            manager.update_log(tid, "Targeting Sticker via Native Dispatch...", driver)
-            
-            # Ye script Facebook ke internal event listeners ko trigger karegi
-            nuclear_script = """
-            var el = arguments[0];
-            var box = el.getBoundingClientRect();
-            var x = box.left + box.width / 2;
-            var y = box.top + box.height / 2;
-
-            function fire(type) {
-                var e = new MouseEvent(type, {
-                    view: window,
-                    bubbles: true,
-                    cancelable: true,
-                    clientX: x,
-                    clientY: y,
-                    buttons: 1
-                });
-                el.dispatchEvent(e);
-            }
-
-            el.focus();
-            fire('mouseover');
-            fire('mousedown');
-            fire('mouseup');
-            fire('click');
-            """
-            driver.execute_script(nuclear_script, target_sticker)
-            
-            # 4. Final Force: Enter key via browser console
-            time.sleep(1)
-            driver.execute_script("window.dispatchEvent(new KeyboardEvent('keydown', {key: 'Enter'}));")
-            
+        if result != "NOT_FOUND":
+            # Force Enter to confirm
+            driver.execute_script("window.dispatchEvent(new KeyboardEvent('keydown', {{'key': 'Enter'}}));")
             return True
         return False
     except Exception as e:
-        manager.update_log(tid, "Scanning UI elements...", driver)
+        manager.update_log(tid, f"ID Dispatch Error: {str(e)[:30]}", driver)
         return False
 
-def worker(tid, cookies, url, delay):
+def worker(tid, cookies, url, sticker_id, delay):
     driver = get_driver()
     try:
-        # Standard Login
         driver.get("https://www.facebook.com")
         for c in cookies.split(';'):
             if '=' in c:
@@ -128,23 +106,17 @@ def worker(tid, cookies, url, delay):
                 driver.add_cookie({'name': n.strip(), 'value': v.strip(), 'domain': '.facebook.com'})
         
         driver.get(url)
-        time.sleep(15)
-        
+        time.sleep(12)
         manager.tasks[tid]["status"] = "Running 🚀"
 
         while not manager.tasks[tid]["stop"]:
-            # Auto-Refresh if stuck
-            if "messages" not in driver.current_url:
-                driver.get(url)
-                time.sleep(10)
-
-            if nuclear_sticker_send(driver, tid):
+            if send_via_sticker_id(driver, tid, sticker_id):
                 manager.tasks[tid]["count"] += 1
-                manager.update_log(tid, f"💥 BOOM! Sticker #{manager.tasks[tid]['count']} sent.", driver)
+                manager.update_log(tid, f"✅ BOOM! Sticker ID {sticker_id} Sent.", driver)
             else:
-                manager.update_log(tid, "Panel failed to respond. Refreshing page...", driver)
+                manager.update_log(tid, "ID not found in current pack. Refreshing...", driver)
                 driver.refresh()
-                time.sleep(12)
+                time.sleep(10)
 
             time.sleep(delay)
     finally:
@@ -152,17 +124,22 @@ def worker(tid, cookies, url, delay):
         if tid in manager.tasks: manager.tasks[tid]["status"] = "Stopped"
 
 # --- UI ---
-st.title("🚀 FB Nuclear Sticker Bot (Final Jugad)")
+st.title("🛡️ FB Sticker ID Sniper (Nuclear Edition)")
 col1, col2 = st.columns([1, 2])
 
 with col1:
-    ck = st.text_area("Fresh Cookies")
-    chat_url = st.text_input("E2EE Chat URL")
-    delay = st.slider("Delay (Sec)", 10, 300, 20)
-    if st.button("🚀 Launch Nuclear Bot"):
-        tid = manager.create_task()
-        threading.Thread(target=worker, args=(tid, ck, chat_url, delay)).start()
-        st.success(f"Task ID: {tid}")
+    ck = st.text_area("Cookies")
+    chat_url = st.text_input("E2EE Chat Link")
+    s_id = st.text_input("Enter Sticker ID", placeholder="Example: 123456789")
+    delay = st.slider("Delay", 10, 300, 20)
+    
+    if st.button("🚀 Start ID Sending"):
+        if ck and chat_url and s_id:
+            tid = manager.create_task()
+            threading.Thread(target=worker, args=(tid, ck, chat_url, s_id, delay)).start()
+            st.success(f"ID: {tid} Started!")
+        else:
+            st.error("Sabh fill kar bhai!")
 
 with col2:
     search = st.text_input("Enter ID").upper()
@@ -170,7 +147,7 @@ with col2:
         data = manager.get_task(search)
         st.metric("Total Stickers Sent", data["count"])
         if data["last_screenshot"]:
-            st.image(base64.b64decode(data["last_screenshot"]), caption="Nuclear View")
+            st.image(base64.b64decode(data["last_screenshot"]), caption="ID Dispatch View")
         st.code("\n".join(data["logs"][-15:]))
         if st.button("Stop"): data["stop"] = True
     
